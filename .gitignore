@@ -1,0 +1,61 @@
+# Data - never commit raw or processed data
+data/raw/
+data/processed/
+
+# Keep the sample and directory structure
+!data/sample/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Environment / secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.Python
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs (HTML/PNG figures are committed; large exports are not)
+outputs/figures/*.png
+
+# Logs and temp files
+*.log
+*.tmp
+logs/
+
+# Model artifacts (large)
+*.pkl
+*.joblib
+*.h5
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/

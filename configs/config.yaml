@@ -1,0 +1,70 @@
+paths:
+  raw_scrobbles: data/raw/userid-timestamp-artid-artname-traid-traname.tsv
+  raw_profiles:  data/raw/userid-profile.tsv
+  processed_scrobbles: data/processed/scrobbles_updated.parquet
+  processed_profiles:  data/processed/profiles.parquet
+  enriched_features:   data/processed/user_features.parquet
+  spotify_cache:       data/processed/spotify_cache.parquet
+  sample_scrobbles:    data/sample/scrobbles_sample.parquet
+
+data_collection:
+  # Fetch scrobbles from this many years back (relative to today)
+  lookback_years: 5
+  # Maximum scrobbles to fetch per user per API call (Last.fm max = 200)
+  lastfm_page_size: 200
+  # Seconds to wait between API calls (Last.fm rate limit ~5 req/s)
+  lastfm_request_delay: 0.25
+  # Max retries for transient API failures
+  max_retries: 5
+  # Users to skip if they have no recent activity (threshold: min scrobbles in lookback window)
+  min_scrobbles_threshold: 50
+
+session_detection:
+  # Gap in minutes between plays that defines a new listening session
+  session_gap_minutes: 30
+
+feature_engineering:
+  # Number of top artists to use for concentration metric
+  top_artists_n: 20
+  # Minimum plays for a track to count as "replayed"
+  replay_min_plays: 2
+  # Time windows (days) for discovery velocity calculation
+  discovery_windows: [30, 90, 180]
+  # PCA components for stability feature (temporal pattern dimensionality reduction)
+  temporal_pca_components: 5
+
+clustering:
+  algorithms:
+    - kmeans
+    - hdbscan
+  kmeans:
+    n_clusters_range: [3, 10]
+    n_init: 20
+    random_state: 42
+  hdbscan:
+    min_cluster_size: 10
+    min_samples: 5
+    metric: euclidean
+  # Scaler to apply before clustering
+  scaler: standard
+  # Whether to apply UMAP before clustering
+  use_umap_for_clustering: false
+  umap:
+    n_components: 2
+    n_neighbors: 15
+    min_dist: 0.1
+    random_state: 42
+
+visualization:
+  color_palette:
+    - "#636EFA"
+    - "#EF553B"
+    - "#00CC96"
+    - "#AB63FA"
+    - "#FFA15A"
+    - "#19D3F3"
+    - "#FF6692"
+    - "#B6E880"
+    - "#FF97FF"
+    - "#FECB52"
+  output_dir: outputs/figures
