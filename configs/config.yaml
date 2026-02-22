@@ -1,6 +1,6 @@
 paths:
-  raw_scrobbles: data/raw/userid-timestamp-artid-artname-traid-traname.tsv
-  raw_profiles:  data/raw/userid-profile.tsv
+  raw_scrobbles: lastfm-dataset-1K/userid-timestamp-artid-artname-traid-traname.tsv
+  raw_profiles:  lastfm-dataset-1K/userid-profile.tsv
   processed_scrobbles: data/processed/scrobbles_updated.csv
   processed_profiles:  data/processed/profiles.csv
   enriched_features:   data/processed/user_features.csv
