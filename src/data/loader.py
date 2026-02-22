@@ -121,6 +121,8 @@ def load_profiles(tsv_path: str | Path, save_parquet: str | Path | None = None) 
         on_bad_lines="skip",
     )
     df["userid"] = df["userid"].str.strip()
+    # Drop any row where the header was read as data (userid == "userid")
+    df = df[df["userid"] != "userid"].copy()
     df["age"] = pd.to_numeric(df["age"], errors="coerce")
     df["signup"] = pd.to_datetime(df["signup"], errors="coerce")
 
