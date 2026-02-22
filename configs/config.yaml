@@ -1,11 +1,11 @@
 paths:
   raw_scrobbles: data/raw/userid-timestamp-artid-artname-traid-traname.tsv
   raw_profiles:  data/raw/userid-profile.tsv
-  processed_scrobbles: data/processed/scrobbles_updated.parquet
-  processed_profiles:  data/processed/profiles.parquet
-  enriched_features:   data/processed/user_features.parquet
-  spotify_cache:       data/processed/spotify_cache.parquet
-  sample_scrobbles:    data/sample/scrobbles_sample.parquet
+  processed_scrobbles: data/processed/scrobbles_updated.csv
+  processed_profiles:  data/processed/profiles.csv
+  enriched_features:   data/processed/user_features.csv
+  spotify_cache:       data/processed/spotify_cache.csv
+  sample_scrobbles:    data/sample/scrobbles_sample.csv
 
 data_collection:
   # Fetch scrobbles from this many years back (relative to today)

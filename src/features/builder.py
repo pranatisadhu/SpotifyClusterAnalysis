@@ -85,7 +85,7 @@ def build_feature_matrix(
 
     if save_path:
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        feature_matrix.to_parquet(save_path)
+        feature_matrix.to_csv(save_path)
         logger.info("Feature matrix saved to %s", save_path)
 
     return feature_matrix

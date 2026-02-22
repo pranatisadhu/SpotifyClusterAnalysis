@@ -185,10 +185,10 @@ def fetch_all_users(
     all_frames: list[pd.DataFrame] = []
 
     for uid in tqdm(userids, desc="Fetching Last.fm scrobbles"):
-        user_path = (save_dir / f"{uid}.parquet") if save_dir else None
+        user_path = (save_dir / f"{uid}.csv") if save_dir else None
 
         if resume and user_path and user_path.exists():
-            df_user = pd.read_parquet(user_path)
+            df_user = pd.read_csv(user_path)
             logger.debug("Resumed %s from cache (%d rows).", uid, len(df_user))
         else:
             df_user = fetch_user_scrobbles(
@@ -199,7 +199,7 @@ def fetch_all_users(
                 request_delay=request_delay,
             )
             if len(df_user) >= min_scrobbles and user_path:
-                df_user.to_parquet(user_path, index=False)
+                df_user.to_csv(user_path, index=False)
 
         if len(df_user) >= min_scrobbles:
             all_frames.append(df_user)

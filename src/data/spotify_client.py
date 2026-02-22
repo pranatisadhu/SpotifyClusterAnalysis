@@ -12,6 +12,7 @@ Provides:
 
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import time
@@ -104,7 +105,11 @@ def fetch_artist_genres(
 
     cache: dict[str, dict] = {}
     if cache_path and Path(cache_path).exists():
-        cached_df = pd.read_parquet(cache_path)
+        cached_df = pd.read_csv(cache_path)
+        # genres was serialised as a string repr of a list — parse it back
+        cached_df["genres"] = cached_df["genres"].apply(
+            lambda v: ast.literal_eval(v) if isinstance(v, str) else (v if isinstance(v, list) else [])
+        )
         for _, row in cached_df.iterrows():
             cache[row["artist_name_normalized"]] = row.to_dict()
         logger.info("Loaded %d cached artist lookups from %s.", len(cache), cache_path)
@@ -150,7 +155,7 @@ def fetch_artist_genres(
 
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path, index=False)
+        df.to_csv(cache_path, index=False)
         logger.info("Artist genre cache saved to %s (%d entries).", cache_path, len(df))
 
     return df
@@ -193,7 +198,7 @@ def fetch_audio_features(
 
     cache: dict[str, dict] = {}
     if cache_path and Path(cache_path).exists():
-        cached_df = pd.read_parquet(cache_path)
+        cached_df = pd.read_csv(cache_path)
         for _, row in cached_df.iterrows():
             cache[row["track_key"]] = row.to_dict()
         logger.info("Loaded %d cached track audio features.", len(cache))
@@ -258,7 +263,7 @@ def fetch_audio_features(
     df = pd.DataFrame(list(cache.values()))
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path, index=False)
+        df.to_csv(cache_path, index=False)
         logger.info("Audio features cache saved to %s.", cache_path)
 
     return df

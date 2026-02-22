@@ -42,7 +42,7 @@ def load_config(config_path: str | Path = "configs/config.yaml") -> dict:
 def load_scrobbles(
     tsv_path: str | Path,
     chunksize: int = 500_000,
-    save_parquet: str | Path | None = None,
+    save_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """
     Load the large scrobbles TSV (userid-timestamp-artid-artname-traid-traname.tsv).
@@ -52,7 +52,7 @@ def load_scrobbles(
     ----------
     tsv_path : path to the raw TSV file
     chunksize : rows per chunk (tune based on available RAM)
-    save_parquet : if given, save the result as Parquet at this path
+    save_path : if given, save the result as CSV at this path
 
     Returns
     -------
@@ -92,15 +92,15 @@ def load_scrobbles(
     df = df.sort_values(["userid", "timestamp"]).reset_index(drop=True)
     logger.info("Scrobbles loaded: %d rows, %d users", len(df), df["userid"].nunique())
 
-    if save_parquet:
-        Path(save_parquet).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(save_parquet, index=False)
-        logger.info("Saved scrobbles to %s", save_parquet)
+    if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(save_path, index=False)
+        logger.info("Saved scrobbles to %s", save_path)
 
     return df
 
 
-def load_profiles(tsv_path: str | Path, save_parquet: str | Path | None = None) -> pd.DataFrame:
+def load_profiles(tsv_path: str | Path, save_path: str | Path | None = None) -> pd.DataFrame:
     """
     Load the user profile TSV (userid-profile.tsv).
 
@@ -128,20 +128,20 @@ def load_profiles(tsv_path: str | Path, save_parquet: str | Path | None = None) 
 
     logger.info("Profiles loaded: %d users", len(df))
 
-    if save_parquet:
-        Path(save_parquet).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(save_parquet, index=False)
-        logger.info("Saved profiles to %s", save_parquet)
+    if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(save_path, index=False)
+        logger.info("Saved profiles to %s", save_path)
 
     return df
 
 
-def load_parquet(path: str | Path) -> pd.DataFrame:
-    """Load a saved Parquet file."""
+def load_csv(path: str | Path) -> pd.DataFrame:
+    """Load a saved CSV file."""
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Parquet file not found: {path}")
-    return pd.read_parquet(path)
+        raise FileNotFoundError(f"CSV file not found: {path}")
+    return pd.read_csv(path)
 
 
 def make_sample(
@@ -162,7 +162,7 @@ def make_sample(
 
     if save_path:
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        sample.to_parquet(save_path, index=False)
+        sample.to_csv(save_path, index=False)
         logger.info("Sample saved: %d rows, %d users → %s", len(sample), n_users, save_path)
 
     return sample
