@@ -65,21 +65,20 @@ def build_network() -> pylast.LastFMNetwork:
     stop=stop_after_attempt(5),
     reraise=True,
 )
-def _fetch_recent_tracks_page(
+def _get_track_stream(
     network: pylast.LastFMNetwork,
     username: str,
     from_ts: int,
     to_ts: int,
-    page: int,
     page_size: int,
-) -> list[pylast.PlayedTrack]:
-    """Fetch one page of recent tracks for a user. Retries on transient errors."""
+):
+    """Return a streaming iterator of PlayedTrack for a user. Retries on transient errors."""
     user = network.get_user(username)
     return user.get_recent_tracks(
         limit=page_size,
         time_from=from_ts,
         time_to=to_ts,
-        page=page,
+        stream=True,
     )
 
 
@@ -104,25 +103,19 @@ def fetch_user_scrobbles(
     to_ts = int(now.timestamp())
 
     records: list[dict] = []
-    page = 1
 
-    logger.debug("Fetching scrobbles for %s (pages)...", username)
+    logger.debug("Fetching scrobbles for %s (streaming)...", username)
 
-    while True:
-        try:
-            tracks = _fetch_recent_tracks_page(
-                network, username, from_ts, to_ts, page, page_size
-            )
-        except pylast.WSError as exc:
-            if "User not found" in str(exc) or "Invalid user" in str(exc):
-                logger.warning("User %s not found on Last.fm — skipping.", username)
-                return pd.DataFrame(columns=_SCROBBLE_COLS)
-            raise
+    try:
+        stream = _get_track_stream(network, username, from_ts, to_ts, page_size)
+    except pylast.WSError as exc:
+        if "User not found" in str(exc) or "Invalid user" in str(exc):
+            logger.warning("User %s not found on Last.fm — skipping.", username)
+            return pd.DataFrame(columns=_SCROBBLE_COLS)
+        raise
 
-        if not tracks:
-            break
-
-        for played in tracks:
+    try:
+        for i, played in enumerate(stream):
             track = played.track
             records.append(
                 {
@@ -134,12 +127,13 @@ def fetch_user_scrobbles(
                     "track_name": track.title,
                 }
             )
-
-        if len(tracks) < page_size:
-            break
-
-        page += 1
-        time.sleep(request_delay)
+            if i > 0 and i % page_size == 0:
+                time.sleep(request_delay)
+    except pylast.WSError as exc:
+        if "User not found" in str(exc) or "Invalid user" in str(exc):
+            logger.warning("User %s not found on Last.fm — skipping.", username)
+            return pd.DataFrame(columns=_SCROBBLE_COLS)
+        raise
 
     if not records:
         logger.info("  %s: no scrobbles in lookback window.", username)
