@@ -129,8 +129,9 @@ def fetch_user_scrobbles(
             )
             if i > 0 and i % page_size == 0:
                 time.sleep(request_delay)
-    except pylast.WSError as exc:
-        if "User not found" in str(exc) or "Invalid user" in str(exc):
+    except (pylast.WSError, pylast.PyLastError) as exc:
+        cause_str = str(exc.__cause__) if exc.__cause__ else str(exc)
+        if "User not found" in cause_str or "Invalid user" in cause_str:
             logger.warning("User %s not found on Last.fm — skipping.", username)
             return pd.DataFrame(columns=_SCROBBLE_COLS)
         raise
