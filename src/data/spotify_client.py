@@ -66,50 +66,74 @@ def build_client() -> spotipy.Spotify:
             client_id=os.environ["SPOTIFY_CLIENT_ID"],
             client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
         ),
-        requests_timeout=10,
+        # (connect_timeout, read_timeout) — prevents hung connections from freezing
+        requests_timeout=(5, 15),
+        retries=0,  # We handle retries ourselves via tenacity
     )
+
+
+def _handle_rate_limit(exc: Exception) -> None:
+    """If the exception is a 429, sleep for the Retry-After period."""
+    if isinstance(exc, spotipy.SpotifyException) and exc.http_status == 429:
+        retry_after = int(getattr(exc, "headers", {}).get("Retry-After", 5))
+        logger.warning("Rate limited (429). Sleeping %ds (Retry-After).", retry_after)
+        time.sleep(retry_after)
 
 
 @retry(
     retry=retry_if_exception_type(Exception),
-    wait=wait_exponential(multiplier=1, min=1, max=30),
-    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(6),
     reraise=True,
 )
 def _search_artist(sp: spotipy.Spotify, artist_name: str) -> dict | None:
     """Search Spotify for an artist by name; return best match or None."""
-    results = sp.search(q=f"artist:{artist_name}", type="artist", limit=1)
+    try:
+        results = sp.search(q=f"artist:{artist_name}", type="artist", limit=1)
+    except spotipy.SpotifyException as exc:
+        _handle_rate_limit(exc)
+        raise
     items = results.get("artists", {}).get("items", [])
     return items[0] if items else None
+
+
+def _save_cache(cache: dict[str, dict], cache_path: Path, columns: list[str]) -> None:
+    """Write the current cache dict to Parquet, creating parent dirs as needed."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(list(cache.values()), columns=columns).to_parquet(cache_path, index=False)
 
 
 def fetch_artist_genres(
     sp: spotipy.Spotify,
     artist_names: list[str],
     cache_path: str | Path | None = None,
-    request_delay: float = 0.1,
+    request_delay: float = 0.2,
+    save_every: int = 500,
 ) -> pd.DataFrame:
     """
     Fetch Spotify genre tags and popularity for each artist in `artist_names`.
     Uses a persistent Parquet cache to avoid repeated lookups.
+
+    Progress is saved to `cache_path` every `save_every` artists so a crash
+    or rate-limit freeze doesn't lose all work.
 
     Returns
     -------
     pd.DataFrame with columns: artist_name_normalized, spotify_artist_id,
     genres (list[str]), popularity
     """
-    # Normalise for cache key matching
     def _norm(name: str) -> str:
         return name.strip().lower()
 
+    resolved_cache_path = Path(cache_path) if cache_path else None
+
     cache: dict[str, dict] = {}
-    if cache_path and Path(cache_path).exists():
-        cached_df = pd.read_parquet(cache_path)
+    if resolved_cache_path and resolved_cache_path.exists():
+        cached_df = pd.read_parquet(resolved_cache_path)
         for _, row in cached_df.iterrows():
             cache[row["artist_name_normalized"]] = row.to_dict()
-        logger.info("Loaded %d cached artist lookups from %s.", len(cache), cache_path)
+        logger.info("Loaded %d cached artist lookups from %s.", len(cache), resolved_cache_path)
 
-    records: list[dict] = []
     names_to_fetch = [n for n in artist_names if _norm(n) not in cache]
     logger.info(
         "Artist genre lookup: %d new artists to fetch (cache has %d).",
@@ -117,7 +141,7 @@ def fetch_artist_genres(
         len(cache),
     )
 
-    for name in tqdm(names_to_fetch, desc="Fetching artist genres"):
+    for i, name in enumerate(tqdm(names_to_fetch, desc="Fetching artist genres"), start=1):
         norm_name = _norm(name)
         try:
             artist = _search_artist(sp, name)
@@ -143,23 +167,27 @@ def fetch_artist_genres(
                 "genres": [],
                 "popularity": None,
             }
+
         time.sleep(request_delay)
 
-    all_records = list(cache.values())
-    df = pd.DataFrame(all_records, columns=_ARTIST_GENRE_COLS)
+        # Periodically flush to disk so a crash doesn't lose all progress
+        if resolved_cache_path and i % save_every == 0:
+            _save_cache(cache, resolved_cache_path, _ARTIST_GENRE_COLS)
+            logger.info("Checkpoint: saved %d entries after %d new fetches.", len(cache), i)
 
-    if cache_path:
-        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path, index=False)
-        logger.info("Artist genre cache saved to %s (%d entries).", cache_path, len(df))
+    df = pd.DataFrame(list(cache.values()), columns=_ARTIST_GENRE_COLS)
+
+    if resolved_cache_path:
+        _save_cache(cache, resolved_cache_path, _ARTIST_GENRE_COLS)
+        logger.info("Artist genre cache saved to %s (%d entries).", resolved_cache_path, len(df))
 
     return df
 
 
 @retry(
     retry=retry_if_exception_type(Exception),
-    wait=wait_exponential(multiplier=1, min=1, max=30),
-    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(6),
     reraise=True,
 )
 def _search_track(
@@ -167,7 +195,11 @@ def _search_track(
 ) -> str | None:
     """Return Spotify track ID for an (artist, track) pair or None."""
     query = f"artist:{artist_name} track:{track_name}"
-    results = sp.search(q=query, type="track", limit=1)
+    try:
+        results = sp.search(q=query, type="track", limit=1)
+    except spotipy.SpotifyException as exc:
+        _handle_rate_limit(exc)
+        raise
     items = results.get("tracks", {}).get("items", [])
     return items[0]["id"] if items else None
 
