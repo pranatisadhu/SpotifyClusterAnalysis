@@ -52,7 +52,7 @@ def compute_temporal_features(
     pd.DataFrame indexed by userid
     """
     df = scrobbles.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
     df["hour"] = df["timestamp"].dt.hour
     df["dow"] = df["timestamp"].dt.dayofweek   # 0=Monday, 6=Sunday
     df["month"] = df["timestamp"].dt.month
