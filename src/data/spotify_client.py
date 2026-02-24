@@ -7,11 +7,19 @@ Provides:
   - Artist genre lookup (by artist name search)
   - Audio feature enrichment for tracks (danceability, energy, valence, etc.)
   - Batched calls to stay within Spotify rate limits
-  - Persistent cache (Parquet) to avoid redundant API calls across runs
+  - Persistent cache (CSV) to avoid redundant API calls across runs
+
+Note on the ``genres`` column
+------------------------------
+Spotify returns a list of genre strings per artist.  Because CSV cannot
+natively store lists, the ``genres`` column is serialised as a JSON string
+on write (e.g. ``'["pop", "indie pop"]'``) and deserialised back to a
+Python list on read.  Callers receive the column as a proper list[str].
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -70,6 +78,19 @@ def build_client() -> spotipy.Spotify:
     )
 
 
+def _parse_genres(value: Any) -> list[str]:
+    """Deserialise a genres value that may be a list, JSON string, or NaN."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, ValueError):
+            return []
+    return []
+
+
 @retry(
     retry=retry_if_exception_type(Exception),
     wait=wait_exponential(multiplier=1, min=1, max=30),
@@ -91,25 +112,27 @@ def fetch_artist_genres(
 ) -> pd.DataFrame:
     """
     Fetch Spotify genre tags and popularity for each artist in `artist_names`.
-    Uses a persistent Parquet cache to avoid repeated lookups.
+    Uses a persistent CSV cache to avoid repeated lookups.
+
+    The returned DataFrame has a ``genres`` column containing Python list[str].
 
     Returns
     -------
     pd.DataFrame with columns: artist_name_normalized, spotify_artist_id,
     genres (list[str]), popularity
     """
-    # Normalise for cache key matching
     def _norm(name: str) -> str:
         return name.strip().lower()
 
     cache: dict[str, dict] = {}
     if cache_path and Path(cache_path).exists():
-        cached_df = pd.read_parquet(cache_path)
+        cached_df = pd.read_csv(cache_path)
+        # Deserialise genres from JSON string back to list
+        cached_df["genres"] = cached_df["genres"].apply(_parse_genres)
         for _, row in cached_df.iterrows():
             cache[row["artist_name_normalized"]] = row.to_dict()
         logger.info("Loaded %d cached artist lookups from %s.", len(cache), cache_path)
 
-    records: list[dict] = []
     names_to_fetch = [n for n in artist_names if _norm(n) not in cache]
     logger.info(
         "Artist genre lookup: %d new artists to fetch (cache has %d).",
@@ -147,10 +170,15 @@ def fetch_artist_genres(
 
     all_records = list(cache.values())
     df = pd.DataFrame(all_records, columns=_ARTIST_GENRE_COLS)
+    # Ensure genres is always a list (not NaN)
+    df["genres"] = df["genres"].apply(_parse_genres)
 
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path, index=False)
+        # Serialise genres list → JSON string for CSV storage
+        df_to_save = df.copy()
+        df_to_save["genres"] = df_to_save["genres"].apply(json.dumps)
+        df_to_save.to_csv(cache_path, index=False)
         logger.info("Artist genre cache saved to %s (%d entries).", cache_path, len(df))
 
     return df
@@ -181,6 +209,7 @@ def fetch_audio_features(
     """
     Fetch Spotify audio features for a list of (artist_name, track_name) pairs.
     Batches the audio-features API call (50 IDs at a time).
+    Uses a persistent CSV cache.
 
     Returns
     -------
@@ -193,7 +222,7 @@ def fetch_audio_features(
 
     cache: dict[str, dict] = {}
     if cache_path and Path(cache_path).exists():
-        cached_df = pd.read_parquet(cache_path)
+        cached_df = pd.read_csv(cache_path)
         for _, row in cached_df.iterrows():
             cache[row["track_key"]] = row.to_dict()
         logger.info("Loaded %d cached track audio features.", len(cache))
@@ -258,7 +287,7 @@ def fetch_audio_features(
     df = pd.DataFrame(list(cache.values()))
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path, index=False)
+        df.to_csv(cache_path, index=False)
         logger.info("Audio features cache saved to %s.", cache_path)
 
     return df

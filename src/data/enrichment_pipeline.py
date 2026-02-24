@@ -2,25 +2,27 @@
 enrichment_pipeline.py
 ----------------------
 Orchestrates the full data enrichment workflow:
-  1. Load baseline scrobbles (existing TSV or already-fetched Parquet)
+  1. Discover a random sample of users via the Last.fm tag→artist→fan graph
+     (or fall back to the baseline TSV if a raw file is present)
   2. Fetch updated scrobbles via Last.fm API for the last N years
   3. Merge baseline + updated, deduplicate
   4. Fetch artist genres from Spotify
   5. Fetch audio features from Spotify for a representative track sample
-  6. Save enriched scrobbles + lookup tables to Parquet
+  6. Save enriched scrobbles + lookup tables to CSV
 
 Run this script once; subsequent analysis reads from data/processed/.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import pandas as pd
 
 from src.data.loader import load_config, load_scrobbles, load_profiles
-from src.data.lastfm_client import build_network, fetch_all_users
+from src.data.lastfm_client import build_network, fetch_all_users, discover_random_users
 from src.data.spotify_client import build_client, fetch_artist_genres, fetch_audio_features
 
 logging.basicConfig(
@@ -39,40 +41,79 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # 1. Load baseline scrobbles from the original 2009 TSV (optional)
+    # 1. Determine which users to fetch scrobbles for
+    #    Priority:
+    #      a) Random discovery via Last.fm API (sample_users is set)
+    #      b) Fall back to baseline TSV if it exists
     # ------------------------------------------------------------------
+    sample_n = dc.get("sample_users")  # e.g. 10_000, or None to use full baseline
+
     baseline_path = Path(paths["raw_scrobbles"])
-    if baseline_path.exists():
-        logger.info("Loading baseline scrobbles from %s...", baseline_path)
-        baseline = load_scrobbles(
-            baseline_path,
-            save_parquet=processed_dir / "scrobbles_baseline.parquet",
+    profile_path = Path(paths["raw_profiles"])
+
+    baseline = pd.DataFrame()
+    userids: list[str] = []
+
+    lfm_network = build_network()
+
+    if sample_n:
+        # ── Random API-based sampling ────────────────────────────────
+        logger.info(
+            "Random user discovery requested (target: %d users). "
+            "Skipping baseline TSV.",
+            sample_n,
+        )
+        userids = discover_random_users(
+            network=lfm_network,
+            target_n=sample_n,
+            n_tags=dc.get("discovery_n_tags", 50),
+            n_artists_per_tag=dc.get("discovery_n_artists_per_tag", 5),
+            n_fans_per_artist=dc.get("discovery_n_fans_per_artist", 100),
+            seed=dc.get("discovery_seed", 42),
+            request_delay=dc["lastfm_request_delay"],
         )
     else:
-        logger.warning(
-            "Baseline TSV not found at %s — skipping. Will use API data only.", baseline_path
-        )
-        baseline = pd.DataFrame()
+        # ── Fall back to baseline TSV ────────────────────────────────
+        if baseline_path.exists():
+            logger.info("Loading baseline scrobbles from %s...", baseline_path)
+            baseline = load_scrobbles(
+                baseline_path,
+                save_csv=processed_dir / "scrobbles_baseline.csv",
+            )
+        else:
+            logger.warning(
+                "Baseline TSV not found at %s — will use profile file for user list.",
+                baseline_path,
+            )
+
+        if profile_path.exists():
+            profiles_df = load_profiles(
+                profile_path,
+                save_csv=processed_dir / "profiles.csv",
+            )
+            userids = profiles_df["userid"].dropna().unique().tolist()
+            logger.info("Found %d users in profile file.", len(userids))
+        elif not baseline.empty:
+            userids = baseline["userid"].unique().tolist()
+            logger.info(
+                "No profile file; using %d users from baseline scrobbles.", len(userids)
+            )
+        else:
+            raise RuntimeError(
+                "Neither profile TSV nor baseline scrobbles found, and sample_users "
+                "is not set. Place raw data in data/raw/ or set sample_users in config."
+            )
 
     # ------------------------------------------------------------------
-    # 2. Load user profiles
+    # 2. Save profiles for API-discovered users (stub when no TSV)
     # ------------------------------------------------------------------
-    profile_path = Path(paths["raw_profiles"])
-    if profile_path.exists():
-        profiles = load_profiles(
-            profile_path,
-            save_parquet=processed_dir / "profiles.parquet",
-        )
-        userids = profiles["userid"].dropna().unique().tolist()
-        logger.info("Found %d users in profile file.", len(userids))
-    elif not baseline.empty:
-        userids = baseline["userid"].unique().tolist()
-        logger.info("No profile file; using %d users from baseline scrobbles.", len(userids))
-    else:
-        raise RuntimeError(
-            "Neither profile TSV nor baseline scrobbles found. "
-            "Place the raw data in data/raw/ before running enrichment."
-        )
+    profiles_csv = processed_dir / "profiles.csv"
+    if sample_n and not profiles_csv.exists():
+        stub = pd.DataFrame({"userid": userids})
+        for col in ["gender", "age", "country", "signup"]:
+            stub[col] = None
+        stub.to_csv(profiles_csv, index=False)
+        logger.info("Stub profiles.csv saved for %d API-discovered users.", len(userids))
 
     # ------------------------------------------------------------------
     # 3. Fetch updated Last.fm scrobbles (last N years)
@@ -82,7 +123,6 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
         dc["lookback_years"],
         len(userids),
     )
-    lfm_network = build_network()
     updated = fetch_all_users(
         network=lfm_network,
         userids=userids,
@@ -103,7 +143,7 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
         subset=["userid", "timestamp", "artist_name", "track_name"]
     ).sort_values(["userid", "timestamp"]).reset_index(drop=True)
 
-    scrobbles.to_parquet(paths["processed_scrobbles"], index=False)
+    scrobbles.to_csv(paths["processed_scrobbles"], index=False)
     logger.info(
         "Merged scrobbles: %d rows, %d users → %s",
         len(scrobbles),
@@ -120,16 +160,17 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
     artist_genres = fetch_artist_genres(
         sp,
         unique_artists,
-        cache_path=processed_dir / "spotify_artist_cache.parquet",
+        cache_path=processed_dir / "spotify_artist_cache.csv",
         request_delay=0.1,
     )
-    artist_genres.to_parquet(processed_dir / "artist_genres.parquet", index=False)
+    # Serialise genres list → JSON string for CSV output
+    df_genres_out = artist_genres.copy()
+    df_genres_out["genres"] = df_genres_out["genres"].apply(json.dumps)
+    df_genres_out.to_csv(processed_dir / "artist_genres.csv", index=False)
     logger.info("Artist genres saved.")
 
     # ------------------------------------------------------------------
     # 6. Sample tracks for audio feature enrichment
-    #    (fetching features for every play in 19M+ rows is prohibitive;
-    #     sample the top N most-played unique tracks per user)
     # ------------------------------------------------------------------
     TOP_TRACKS_PER_USER = 20
     track_sample = (
@@ -140,11 +181,7 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
         .groupby("userid")
         .head(TOP_TRACKS_PER_USER)
     )
-    track_pairs = list(
-        zip(track_sample["artist_name"], track_sample["track_name"])
-    )
-    # Deduplicate (same track can appear for multiple users)
-    track_pairs = list(set(track_pairs))
+    track_pairs = list(set(zip(track_sample["artist_name"], track_sample["track_name"])))
     logger.info(
         "Fetching Spotify audio features for %d unique (artist, track) pairs...",
         len(track_pairs),
@@ -152,10 +189,10 @@ def run_enrichment(config_path: str = "configs/config.yaml") -> None:
     audio_features = fetch_audio_features(
         sp,
         track_pairs,
-        cache_path=processed_dir / "spotify_audio_features_cache.parquet",
+        cache_path=processed_dir / "spotify_audio_features_cache.csv",
         request_delay=0.1,
     )
-    audio_features.to_parquet(processed_dir / "audio_features.parquet", index=False)
+    audio_features.to_csv(processed_dir / "audio_features.csv", index=False)
     logger.info("Audio features saved.")
 
     logger.info("Enrichment pipeline complete. All outputs in %s/", processed_dir)

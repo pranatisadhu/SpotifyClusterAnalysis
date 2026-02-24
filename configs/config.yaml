@@ -1,13 +1,28 @@
 paths:
   raw_scrobbles: data/raw/userid-timestamp-artid-artname-traid-traname.tsv
   raw_profiles:  data/raw/userid-profile.tsv
-  processed_scrobbles: data/processed/scrobbles_updated.parquet
-  processed_profiles:  data/processed/profiles.parquet
-  enriched_features:   data/processed/user_features.parquet
-  spotify_cache:       data/processed/spotify_cache.parquet
-  sample_scrobbles:    data/sample/scrobbles_sample.parquet
+  processed_scrobbles: data/processed/scrobbles_updated.csv
+  processed_profiles:  data/processed/profiles.csv
+  enriched_features:   data/processed/user_features.csv
+  spotify_cache:       data/processed/spotify_cache.csv
+  sample_scrobbles:    data/sample/scrobbles_sample.csv
 
 data_collection:
+  # Number of users to randomly sample from Last.fm via tag→artist→fan discovery.
+  # Set to null to use all users from the baseline TSV instead.
+  sample_users: 10000
+
+  # --- Last.fm random user discovery settings ---
+  # Number of top global tags (genres/moods) to seed discovery from
+  discovery_n_tags: 50
+  # Top artists to fetch per tag
+  discovery_n_artists_per_tag: 5
+  # Top fans to fetch per artist (these become candidate users)
+  discovery_n_fans_per_artist: 100
+  # Random seed for reproducible user sampling
+  discovery_seed: 42
+
+  # --- Scrobble fetch settings ---
   # Fetch scrobbles from this many years back (relative to today)
   lookback_years: 5
   # Maximum scrobbles to fetch per user per API call (Last.fm max = 200)

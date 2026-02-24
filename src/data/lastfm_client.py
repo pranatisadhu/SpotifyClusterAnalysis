@@ -9,12 +9,14 @@ Handles:
   - Paginated user.getRecentTracks (last N years)
   - Rate-limit-aware retries via tenacity
   - Incremental saving to avoid data loss on long runs
+  - Random user discovery via tag → artist → fan graph
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import random
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -57,6 +59,107 @@ def build_network() -> pylast.LastFMNetwork:
         username=username or None,
         password_hash=password_hash or None,
     )
+
+
+def discover_random_users(
+    network: pylast.LastFMNetwork,
+    target_n: int = 10_000,
+    n_tags: int = 50,
+    n_artists_per_tag: int = 5,
+    n_fans_per_artist: int = 100,
+    seed: int = 42,
+    request_delay: float = 0.5,
+) -> list[str]:
+    """
+    Discover a diverse random sample of Last.fm usernames by walking the
+    tag → artist → fan graph.
+
+    Steps:
+      1. Fetch the top ``n_tags`` global tags (genres / moods).
+      2. For each tag fetch the top ``n_artists_per_tag`` artists.
+      3. For each artist fetch up to ``n_fans_per_artist`` top fans (users).
+      4. Deduplicate the union, then randomly sample ``target_n`` usernames.
+
+    The three-hop walk ensures diversity: users are spread across genres
+    and listening styles rather than being clustered around one community.
+
+    Parameters
+    ----------
+    network           : authenticated pylast LastFMNetwork
+    target_n          : desired number of unique users to return
+    n_tags            : number of global top tags to seed the walk from
+    n_artists_per_tag : top artists to pull per tag
+    n_fans_per_artist : top fans to pull per artist
+    seed              : random seed for reproducible sampling
+    request_delay     : seconds between API calls (respect rate limits)
+
+    Returns
+    -------
+    List of up to ``target_n`` unique Last.fm usernames, randomly sampled
+    from the discovered pool.
+    """
+    rng = random.Random(seed)
+    user_pool: set[str] = set()
+
+    # ── Step 1: Fetch top global tags ────────────────────────────────────────
+    logger.info("Fetching top %d Last.fm tags for user discovery...", n_tags)
+    try:
+        top_tag_items = network.get_top_tags(limit=n_tags)
+        tags = [t.item for t in top_tag_items[:n_tags]]
+    except Exception as exc:
+        logger.error("Failed to fetch top tags: %s", exc)
+        return []
+
+    logger.info("Got %d tags. Walking tag → artist → fan graph...", len(tags))
+
+    # ── Steps 2 & 3: Walk to fans ────────────────────────────────────────────
+    for tag in tqdm(tags, desc="Discovering users (tag→artist→fan)"):
+        if len(user_pool) >= target_n * 3:
+            logger.info("Pool (%d users) is 3× target — stopping early.", len(user_pool))
+            break
+
+        try:
+            top_artists = tag.get_top_artists(limit=n_artists_per_tag)
+            time.sleep(request_delay)
+        except Exception as exc:
+            logger.debug("Could not get artists for tag '%s': %s", tag, exc)
+            continue
+
+        for artist_item in top_artists[:n_artists_per_tag]:
+            try:
+                fans = artist_item.item.get_top_fans(limit=n_fans_per_artist)
+                time.sleep(request_delay)
+                for fan in fans:
+                    # pylast User objects expose .get_name() or .name
+                    username = (
+                        fan.item.get_name()
+                        if hasattr(fan.item, "get_name")
+                        else str(fan.item)
+                    )
+                    if username:
+                        user_pool.add(username)
+            except Exception as exc:
+                logger.debug(
+                    "Could not get fans for artist '%s': %s", artist_item.item, exc
+                )
+
+    # ── Step 4: Sample ───────────────────────────────────────────────────────
+    user_pool_list = sorted(user_pool)
+    logger.info("User pool: %d unique usernames discovered.", len(user_pool_list))
+
+    if len(user_pool_list) >= target_n:
+        sampled = rng.sample(user_pool_list, target_n)
+    else:
+        logger.warning(
+            "Pool size (%d) is smaller than target (%d). Using all discovered users.",
+            len(user_pool_list),
+            target_n,
+        )
+        sampled = user_pool_list
+        rng.shuffle(sampled)
+
+    logger.info("Sampled %d users for enrichment.", len(sampled))
+    return sampled
 
 
 @retry(
@@ -166,12 +269,12 @@ def fetch_all_users(
     Parameters
     ----------
     network : authenticated pylast network
-    userids : list of Last.fm usernames (from the original dataset)
+    userids : list of Last.fm usernames
     lookback_years : how many years back to pull
     page_size : Last.fm API page size (max 200)
     request_delay : seconds between requests per page
     min_scrobbles : drop users with fewer scrobbles than this in the window
-    save_dir : directory for incremental per-user Parquet saves
+    save_dir : directory for incremental per-user CSV saves (allows resuming)
     resume : if True, skip users whose save file already exists in save_dir
 
     Returns
@@ -185,10 +288,11 @@ def fetch_all_users(
     all_frames: list[pd.DataFrame] = []
 
     for uid in tqdm(userids, desc="Fetching Last.fm scrobbles"):
-        user_path = (save_dir / f"{uid}.parquet") if save_dir else None
+        # Per-user incremental cache stored as CSV
+        user_path = (save_dir / f"{uid}.csv") if save_dir else None
 
         if resume and user_path and user_path.exists():
-            df_user = pd.read_parquet(user_path)
+            df_user = pd.read_csv(user_path, parse_dates=["timestamp"])
             logger.debug("Resumed %s from cache (%d rows).", uid, len(df_user))
         else:
             df_user = fetch_user_scrobbles(
@@ -199,7 +303,7 @@ def fetch_all_users(
                 request_delay=request_delay,
             )
             if len(df_user) >= min_scrobbles and user_path:
-                df_user.to_parquet(user_path, index=False)
+                df_user.to_csv(user_path, index=False)
 
         if len(df_user) >= min_scrobbles:
             all_frames.append(df_user)

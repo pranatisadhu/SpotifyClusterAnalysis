@@ -2,7 +2,7 @@
 builder.py
 ----------
 Combines all feature modules into a single user-level feature matrix.
-Saves the result to data/processed/user_features.parquet.
+Saves the result to data/processed/user_features.csv.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def build_feature_matrix(
 
     if save_path:
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        feature_matrix.to_parquet(save_path)
+        feature_matrix.to_csv(save_path)
         logger.info("Feature matrix saved to %s", save_path)
 
     return feature_matrix
