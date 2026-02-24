@@ -285,36 +285,53 @@ def fetch_all_users(
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
-    all_frames: list[pd.DataFrame] = []
+    # Track qualifying CSV paths separately from in-memory frames.
+    # Files are written only when a user meets min_scrobbles, so existence
+    # implies the threshold was already passed — no need to re-read during
+    # the fetch loop.  This avoids the 2× memory spike that occurs when all
+    # user DataFrames are held in a list before pd.concat.
+    qualifying_paths: list[Path] = []
+    fallback_frames: list[pd.DataFrame] = []   # used only when save_dir is None
 
     for uid in tqdm(userids, desc="Fetching Last.fm scrobbles"):
-        # Per-user incremental cache stored as CSV
         user_path = (save_dir / f"{uid}.csv") if save_dir else None
 
         if resume and user_path and user_path.exists():
-            df_user = pd.read_csv(user_path, parse_dates=["timestamp"])
-            logger.debug("Resumed %s from cache (%d rows).", uid, len(df_user))
-        else:
-            df_user = fetch_user_scrobbles(
-                network,
-                uid,
-                lookback_years=lookback_years,
-                page_size=page_size,
-                request_delay=request_delay,
-            )
-            if len(df_user) >= min_scrobbles and user_path:
-                df_user.to_csv(user_path, index=False)
+            # File exists ↔ user already passed min_scrobbles threshold
+            qualifying_paths.append(user_path)
+            logger.debug("Queued %s from cache.", uid)
+            continue
+
+        df_user = fetch_user_scrobbles(
+            network,
+            uid,
+            lookback_years=lookback_years,
+            page_size=page_size,
+            request_delay=request_delay,
+        )
 
         if len(df_user) >= min_scrobbles:
-            all_frames.append(df_user)
+            if user_path:
+                df_user.to_csv(user_path, index=False)
+                qualifying_paths.append(user_path)
+            else:
+                fallback_frames.append(df_user)
         else:
             logger.info("Dropping %s: only %d scrobbles (< %d).", uid, len(df_user), min_scrobbles)
 
-    if not all_frames:
+    if not qualifying_paths and not fallback_frames:
         logger.warning("No users passed the minimum scrobble threshold.")
         return pd.DataFrame(columns=_SCROBBLE_COLS)
 
-    combined = pd.concat(all_frames, ignore_index=True)
+    # Read qualifying users from disk one at a time into the concat call —
+    # peak memory is now just the final combined DataFrame, not 2× that.
+    frames: list[pd.DataFrame] = [
+        pd.read_csv(p, parse_dates=["timestamp"])
+        for p in tqdm(qualifying_paths, desc="Reading user CSVs")
+    ]
+    frames.extend(fallback_frames)
+
+    combined = pd.concat(frames, ignore_index=True)
     combined = combined.sort_values(["userid", "timestamp"]).reset_index(drop=True)
     logger.info(
         "Fetch complete: %d scrobbles across %d users.",

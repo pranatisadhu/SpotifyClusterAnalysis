@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from datetime import timedelta
+from tqdm import tqdm
 
 
 def _detect_sessions(
@@ -33,8 +34,8 @@ def _detect_sessions(
     """
     Assign a session ID to each row.  A new session starts whenever the
     gap between consecutive plays exceeds `session_gap_minutes`.
+    Caller must ensure user_df is already sorted by timestamp.
     """
-    user_df = user_df.sort_values("timestamp")
     deltas = user_df["timestamp"].diff()
     gap = pd.Timedelta(minutes=session_gap_minutes)
     session_starts = (deltas > gap) | deltas.isna()
@@ -59,10 +60,19 @@ def compute_engagement_features(
     pd.DataFrame indexed by userid
     """
     records: list[dict] = []
-    users = scrobbles["userid"].unique()
 
-    for uid in users:
-        df = scrobbles[scrobbles["userid"] == uid].sort_values("timestamp").copy()
+    # Sort once upfront so each groupby group arrives pre-sorted by timestamp.
+    # groupby then yields each user's slice directly without a repeated full-table
+    # boolean scan — ~100× faster than filtering inside a plain for-loop.
+    scrobbles_sorted = scrobbles.sort_values(["userid", "timestamp"])
+    n_users = scrobbles_sorted["userid"].nunique()
+
+    for uid, df in tqdm(
+        scrobbles_sorted.groupby("userid", sort=False),
+        desc="Computing engagement features",
+        total=n_users,
+    ):
+        df = df.reset_index(drop=True)
 
         total_scrobbles = len(df)
         unique_tracks = df.groupby(["artist_name", "track_name"]).ngroups
