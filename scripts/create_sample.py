@@ -50,7 +50,7 @@ duckdb.sql(f"""
         WITH sampled_users AS (
             SELECT DISTINCT userid
             FROM read_csv_auto('{SOURCE}', header=True)
-            USING SAMPLE {N_USERS} ROWS (bernoulli, {SEED})
+            USING SAMPLE {N_USERS} ROWS (reservoir, {SEED})
         )
         SELECT s.*
         FROM read_csv_auto('{SOURCE}', header=True) s
