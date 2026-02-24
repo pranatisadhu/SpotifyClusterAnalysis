@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Generator, Iterator
 
 import pandas as pd
+import pyarrow.parquet as pq
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -164,3 +166,155 @@ def make_sample(
         logger.info("Sample saved: %d rows, %d users → %s", len(sample), n_users, save_path)
 
     return sample
+
+
+# ---------------------------------------------------------------------------
+# Memory-efficient / chunked Parquet helpers
+# ---------------------------------------------------------------------------
+
+def get_parquet_userids(path: str | Path) -> list[str]:
+    """
+    Read only the 'userid' column from a Parquet file and return all unique
+    user IDs.  Much cheaper than loading the entire file.
+
+    Parameters
+    ----------
+    path : path to the Parquet file (e.g. scrobbles_updated.parquet)
+
+    Returns
+    -------
+    Sorted list of unique user ID strings.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Parquet file not found: {path}")
+    table = pq.read_table(path, columns=["userid"])
+    userids = table.column("userid").to_pylist()
+    unique = sorted(set(u for u in userids if u is not None))
+    logger.info("Found %d unique users in %s", len(unique), path)
+    return unique
+
+
+def load_parquet_chunked(
+    path: str | Path,
+    batch_size: int = 100_000,
+    columns: list[str] | None = None,
+) -> Iterator[pd.DataFrame]:
+    """
+    Stream a Parquet file in row-group batches to avoid loading the whole
+    file into RAM at once.
+
+    Parameters
+    ----------
+    path       : path to the Parquet file
+    batch_size : approximate number of rows per yielded DataFrame
+    columns    : if given, only these columns are read (column pruning)
+
+    Yields
+    ------
+    pd.DataFrame with up to `batch_size` rows each.
+
+    Example
+    -------
+    >>> feature_chunks = []
+    >>> for chunk in load_parquet_chunked('data/processed/scrobbles_updated.parquet',
+    ...                                   columns=['userid', 'timestamp']):
+    ...     feature_chunks.append(compute_temporal_features(chunk))
+    >>> temporal = pd.concat(feature_chunks)
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Parquet file not found: {path}")
+
+    pf = pq.ParquetFile(path)
+    for batch in pf.iter_batches(batch_size=batch_size, columns=columns):
+        yield batch.to_pandas()
+
+
+def load_parquet_for_users(
+    path: str | Path,
+    userids: list[str],
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Load scrobbles for a specific subset of users using Parquet predicate
+    pushdown — far cheaper than reading the whole file when you only need
+    a few users.
+
+    Parameters
+    ----------
+    path    : path to the Parquet file
+    userids : list of user IDs to include
+    columns : if given, only these columns are loaded (column pruning)
+
+    Returns
+    -------
+    pd.DataFrame containing only the requested users' rows.
+
+    Example
+    -------
+    >>> chunk = load_parquet_for_users(
+    ...     'data/processed/scrobbles_updated.parquet',
+    ...     userids=['user_001', 'user_002'],
+    ...     columns=['userid', 'timestamp', 'artist_name', 'track_name'],
+    ... )
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Parquet file not found: {path}")
+
+    filters = [("userid", "in", set(userids))]
+    table = pq.read_table(path, columns=columns, filters=filters)
+    df = table.to_pandas()
+    logger.info(
+        "Loaded %d rows for %d/%d requested users from %s",
+        len(df), df["userid"].nunique() if len(df) else 0, len(userids), path
+    )
+    return df
+
+
+def stream_scrobbles_by_user_batch(
+    path: str | Path,
+    all_userids: list[str],
+    users_per_batch: int = 100,
+    columns: list[str] | None = None,
+) -> Generator[pd.DataFrame, None, None]:
+    """
+    Yield scrobble DataFrames in batches of `users_per_batch` users.
+
+    This is the recommended pattern for feature engineering on large files:
+    process one user-batch at a time, concatenate results at the end.
+
+    Parameters
+    ----------
+    path            : path to the Parquet file
+    all_userids     : full list of user IDs (get via ``get_parquet_userids``)
+    users_per_batch : how many users to load at once (tune to your RAM)
+    columns         : optional column subset (column pruning)
+
+    Yields
+    ------
+    pd.DataFrame — scrobbles for `users_per_batch` users.
+
+    Example
+    -------
+    >>> userids = get_parquet_userids('data/processed/scrobbles_updated.parquet')
+    >>> results = []
+    >>> for chunk in stream_scrobbles_by_user_batch(
+    ...         'data/processed/scrobbles_updated.parquet', userids,
+    ...         users_per_batch=100,
+    ...         columns=['userid', 'timestamp', 'artist_name', 'track_name']):
+    ...     results.append(compute_engagement_features(chunk))
+    >>> engagement = pd.concat(results)
+    """
+    path = Path(path)
+    n_batches = (len(all_userids) + users_per_batch - 1) // users_per_batch
+    logger.info(
+        "Streaming %d users in %d batches of %d from %s",
+        len(all_userids), n_batches, users_per_batch, path
+    )
+    for i in range(0, len(all_userids), users_per_batch):
+        batch_users = all_userids[i : i + users_per_batch]
+        batch_num = i // users_per_batch + 1
+        logger.info("  Batch %d/%d — users %d–%d", batch_num, n_batches, i + 1, i + len(batch_users))
+        yield load_parquet_for_users(path, batch_users, columns=columns)
