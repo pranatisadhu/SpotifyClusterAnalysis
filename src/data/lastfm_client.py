@@ -265,7 +265,7 @@ def discover_random_users(
         for artist_item in top_artists:
             artist_name = artist_item.item.get_name() if hasattr(artist_item.item, "get_name") else str(artist_item.item)
             try:
-                fans = network.get_artist(artist_name).get_top_listeners(limit=n_fans_per_artist)
+                fans = network.get_artist(artist_name).get_top_fans(limit=n_fans_per_artist)
                 for fan in fans:
                     username = fan.item.get_name() if hasattr(fan.item, "get_name") else str(fan.item)
                     if username:
