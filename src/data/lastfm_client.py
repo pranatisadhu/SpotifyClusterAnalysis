@@ -70,16 +70,14 @@ def _fetch_recent_tracks_page(
     username: str,
     from_ts: int,
     to_ts: int,
-    page: int,
     page_size: int,
 ) -> list[pylast.PlayedTrack]:
-    """Fetch one page of recent tracks for a user. Retries on transient errors."""
+    """Fetch one window of recent tracks for a user. Retries on transient errors."""
     user = network.get_user(username)
     return user.get_recent_tracks(
         limit=page_size,
         time_from=from_ts,
         time_to=to_ts,
-        page=page,
     )
 
 
@@ -104,14 +102,14 @@ def fetch_user_scrobbles(
     to_ts = int(now.timestamp())
 
     records: list[dict] = []
-    page = 1
+    current_to_ts = to_ts
 
-    logger.debug("Fetching scrobbles for %s (pages)...", username)
+    logger.debug("Fetching scrobbles for %s (time-sliding)...", username)
 
     while True:
         try:
             tracks = _fetch_recent_tracks_page(
-                network, username, from_ts, to_ts, page, page_size
+                network, username, from_ts, current_to_ts, page_size
             )
         except pylast.WSError as exc:
             if "User not found" in str(exc) or "Invalid user" in str(exc):
@@ -138,7 +136,12 @@ def fetch_user_scrobbles(
         if len(tracks) < page_size:
             break
 
-        page += 1
+        # Slide the window back to just before the oldest track in this batch
+        oldest_ts = min(int(played.timestamp) for played in tracks)
+        current_to_ts = oldest_ts - 1
+        if current_to_ts <= from_ts:
+            break
+
         time.sleep(request_delay)
 
     if not records:
