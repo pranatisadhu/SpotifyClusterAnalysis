@@ -265,13 +265,20 @@ def discover_random_users(
         for artist_item in top_artists:
             artist_name = artist_item.item.get_name() if hasattr(artist_item.item, "get_name") else str(artist_item.item)
             try:
-                fans = network.get_artist(artist_name).get_top_fans(limit=n_fans_per_artist)
-                for fan in fans:
-                    username = fan.item.get_name() if hasattr(fan.item, "get_name") else str(fan.item)
-                    if username:
-                        user_pool.add(username)
+                # artist.getTopFans is deprecated on Last.fm; use shouts instead
+                # to discover active users who have interacted with the artist.
+                shouts = network.get_artist(artist_name).get_shouts(
+                    limit=n_fans_per_artist, cacheable=False
+                )
+                for shout in shouts:
+                    try:
+                        username = shout.author.get_name()
+                        if username:
+                            user_pool.add(username)
+                    except Exception:
+                        continue
             except Exception as exc:
-                logger.warning("Could not fetch fans for artist '%s': %s", artist_name, exc)
+                logger.warning("Could not fetch shouts for artist '%s': %s", artist_name, exc)
                 continue
 
             time.sleep(request_delay)
