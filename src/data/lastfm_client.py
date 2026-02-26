@@ -220,6 +220,79 @@ def fetch_all_users(
     return combined
 
 
+def discover_random_users(
+    network: pylast.LastFMNetwork,
+    target_n: int = 1000,
+    n_tags: int = 20,
+    n_artists_per_tag: int = 10,
+    n_fans_per_artist: int = 50,
+    seed: int = 42,
+    request_delay: float = 0.25,
+) -> list[str]:
+    """
+    Discover a pool of Last.fm usernames by crawling tags → top artists → top listeners.
+
+    Strategy
+    --------
+    1. Fetch the global top tags from Last.fm.
+    2. For each of the top `n_tags` tags, fetch `n_artists_per_tag` top artists.
+    3. For each artist, fetch up to `n_fans_per_artist` top listeners (fans).
+    4. Deduplicate and sample `target_n` usernames using `seed` for reproducibility.
+
+    Returns
+    -------
+    List of Last.fm usernames (strings).
+    """
+    import random
+
+    rng = random.Random(seed)
+    user_pool: set[str] = set()
+
+    try:
+        top_tags = network.get_top_tags(limit=n_tags)
+    except Exception as exc:
+        logger.error("Failed to fetch top tags: %s", exc)
+        return []
+
+    for tag_item in top_tags:
+        tag_name = tag_item.item.get_name() if hasattr(tag_item.item, "get_name") else str(tag_item.item)
+        try:
+            top_artists = network.get_tag(tag_name).get_top_artists(limit=n_artists_per_tag)
+        except Exception as exc:
+            logger.warning("Could not fetch artists for tag '%s': %s", tag_name, exc)
+            continue
+
+        for artist_item in top_artists:
+            artist_name = artist_item.item.get_name() if hasattr(artist_item.item, "get_name") else str(artist_item.item)
+            try:
+                fans = network.get_artist(artist_name).get_top_listeners(limit=n_fans_per_artist)
+                for fan in fans:
+                    username = fan.item.get_name() if hasattr(fan.item, "get_name") else str(fan.item)
+                    if username:
+                        user_pool.add(username)
+            except Exception as exc:
+                logger.warning("Could not fetch fans for artist '%s': %s", artist_name, exc)
+                continue
+
+            time.sleep(request_delay)
+
+    logger.info("User pool: %d unique usernames discovered.", len(user_pool))
+
+    pool_list = sorted(user_pool)
+    if len(pool_list) < target_n:
+        logger.warning(
+            "Pool size (%d) is smaller than target (%d). Using all discovered users.",
+            len(pool_list),
+            target_n,
+        )
+        sampled = pool_list
+    else:
+        sampled = rng.sample(pool_list, target_n)
+
+    logger.info("Sampled %d users for enrichment.", len(sampled))
+    return sampled
+
+
 def get_user_top_artists(
     network: pylast.LastFMNetwork,
     username: str,

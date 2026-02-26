@@ -18,6 +18,12 @@ data_collection:
   max_retries: 5
   # Users to skip if they have no recent activity (threshold: min scrobbles in lookback window)
   min_scrobbles_threshold: 50
+  # User discovery settings (discover_random_users)
+  sample_users: 1000
+  discovery_n_tags: 20
+  discovery_n_artists_per_tag: 10
+  discovery_n_fans_per_artist: 50
+  discovery_seed: 42
 
 session_detection:
   # Gap in minutes between plays that defines a new listening session
