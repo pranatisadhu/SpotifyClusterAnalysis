@@ -230,58 +230,56 @@ def discover_random_users(
     request_delay: float = 0.25,
 ) -> list[str]:
     """
-    Discover a pool of Last.fm usernames by crawling tags → top artists → top listeners.
+    Discover a pool of Last.fm usernames via a friend-graph BFS walk.
 
     Strategy
     --------
-    1. Fetch the global top tags from Last.fm.
-    2. For each of the top `n_tags` tags, fetch `n_artists_per_tag` top artists.
-    3. For each artist, fetch up to `n_fans_per_artist` top listeners (fans).
-    4. Deduplicate and sample `target_n` usernames using `seed` for reproducibility.
+    Starts from a small set of seed users and expands by fetching each
+    user's friends (user.getFriends) until the pool reaches 3x target_n,
+    then samples target_n users reproducibly using `seed`.
+
+    n_fans_per_artist is repurposed as the friends-per-user fetch limit.
+    n_tags and n_artists_per_tag are kept for API compatibility but unused.
 
     Returns
     -------
     List of Last.fm usernames (strings).
     """
     import random
+    from collections import deque
 
     rng = random.Random(seed)
-    user_pool: set[str] = set()
+    friends_per_user = n_fans_per_artist
 
-    try:
-        top_tags = network.get_top_tags(limit=n_tags)
-    except Exception as exc:
-        logger.error("Failed to fetch top tags: %s", exc)
-        return []
+    seed_users = ["RJ", "Russ", "ottonassar", "Babs_05", "Knapster01"]
+    user_pool: set[str] = set(seed_users)
+    queue: deque[str] = deque(seed_users)
 
-    for tag_item in top_tags:
-        tag_name = tag_item.item.get_name() if hasattr(tag_item.item, "get_name") else str(tag_item.item)
+    logger.info(
+        "Starting friend-walk from %d seed users. Target pool: %d users.",
+        len(seed_users),
+        target_n,
+    )
+
+    while queue and len(user_pool) < target_n * 3:
+        username = queue.popleft()
         try:
-            top_artists = network.get_tag(tag_name).get_top_artists(limit=n_artists_per_tag)
+            friends = network.get_user(username).get_friends(limit=friends_per_user)
+            time.sleep(request_delay)
+            for friend in friends:
+                try:
+                    fname = friend.get_name()
+                    if fname and fname not in user_pool:
+                        user_pool.add(fname)
+                        queue.append(fname)
+                except Exception:
+                    continue
         except Exception as exc:
-            logger.warning("Could not fetch artists for tag '%s': %s", tag_name, exc)
+            logger.debug("Could not get friends for '%s': %s", username, exc)
             continue
 
-        for artist_item in top_artists:
-            artist_name = artist_item.item.get_name() if hasattr(artist_item.item, "get_name") else str(artist_item.item)
-            try:
-                # artist.getTopFans is deprecated on Last.fm; use shouts instead
-                # to discover active users who have interacted with the artist.
-                shouts = network.get_artist(artist_name).get_shouts(
-                    limit=n_fans_per_artist, cacheable=False
-                )
-                for shout in shouts:
-                    try:
-                        username = shout.author.get_name()
-                        if username:
-                            user_pool.add(username)
-                    except Exception:
-                        continue
-            except Exception as exc:
-                logger.warning("Could not fetch shouts for artist '%s': %s", artist_name, exc)
-                continue
-
-            time.sleep(request_delay)
+        if len(user_pool) % 200 == 0 and len(user_pool) > 0:
+            logger.info("Pool size: %d (queue: %d)", len(user_pool), len(queue))
 
     logger.info("User pool: %d unique usernames discovered.", len(user_pool))
 
