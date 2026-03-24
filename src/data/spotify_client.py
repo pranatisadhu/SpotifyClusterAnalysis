@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -88,28 +90,32 @@ def fetch_artist_genres(
     artist_names: list[str],
     cache_path: str | Path | None = None,
     request_delay: float = 0.1,
+    max_workers: int = 10,
+    cache_save_interval: int = 500,
 ) -> pd.DataFrame:
     """
     Fetch Spotify genre tags and popularity for each artist in `artist_names`.
     Uses a persistent Parquet cache to avoid repeated lookups.
+    Fetches in parallel using a thread pool; saves cache periodically so
+    progress is not lost on interruption.
 
     Returns
     -------
     pd.DataFrame with columns: artist_name_normalized, spotify_artist_id,
     genres (list[str]), popularity
     """
-    # Normalise for cache key matching
     def _norm(name: str) -> str:
         return name.strip().lower()
 
     cache: dict[str, dict] = {}
+    cache_lock = threading.Lock()
+
     if cache_path and Path(cache_path).exists():
         cached_df = pd.read_parquet(cache_path)
         for _, row in cached_df.iterrows():
             cache[row["artist_name_normalized"]] = row.to_dict()
         logger.info("Loaded %d cached artist lookups from %s.", len(cache), cache_path)
 
-    records: list[dict] = []
     names_to_fetch = [n for n in artist_names if _norm(n) not in cache]
     logger.info(
         "Artist genre lookup: %d new artists to fetch (cache has %d).",
@@ -117,33 +123,51 @@ def fetch_artist_genres(
         len(cache),
     )
 
-    for name in tqdm(names_to_fetch, desc="Fetching artist genres"):
+    completed_count = 0
+
+    def _fetch_one(name: str) -> None:
+        nonlocal completed_count
+        # Each thread gets its own client to avoid shared session state
+        thread_sp = build_client()
         norm_name = _norm(name)
         try:
-            artist = _search_artist(sp, name)
-            if artist:
-                cache[norm_name] = {
-                    "artist_name_normalized": norm_name,
-                    "spotify_artist_id": artist["id"],
-                    "genres": artist.get("genres", []),
-                    "popularity": artist.get("popularity", None),
-                }
-            else:
-                cache[norm_name] = {
-                    "artist_name_normalized": norm_name,
-                    "spotify_artist_id": None,
-                    "genres": [],
-                    "popularity": None,
-                }
+            artist = _search_artist(thread_sp, name)
+            record = {
+                "artist_name_normalized": norm_name,
+                "spotify_artist_id": artist["id"] if artist else None,
+                "genres": artist.get("genres", []) if artist else [],
+                "popularity": artist.get("popularity", None) if artist else None,
+            }
         except Exception as exc:
             logger.warning("Failed to fetch artist '%s': %s", name, exc)
-            cache[norm_name] = {
+            record = {
                 "artist_name_normalized": norm_name,
                 "spotify_artist_id": None,
                 "genres": [],
                 "popularity": None,
             }
-        time.sleep(request_delay)
+
+        with cache_lock:
+            cache[norm_name] = record
+            completed_count += 1
+            # Periodically save cache so progress survives interruption
+            if cache_path and completed_count % cache_save_interval == 0:
+                _save_cache(cache, cache_path)
+                logger.info(
+                    "Progress saved: %d / %d fetched.", completed_count, len(names_to_fetch)
+                )
+
+    def _save_cache(c: dict, path: str | Path) -> None:
+        df_tmp = pd.DataFrame(list(c.values()), columns=_ARTIST_GENRE_COLS)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        df_tmp.to_parquet(path, index=False)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_one, name): name for name in names_to_fetch}
+        with tqdm(total=len(names_to_fetch), desc="Fetching artist genres") as pbar:
+            for future in as_completed(futures):
+                future.result()  # re-raise any uncaught exception
+                pbar.update(1)
 
     all_records = list(cache.values())
     df = pd.DataFrame(all_records, columns=_ARTIST_GENRE_COLS)
@@ -177,10 +201,11 @@ def fetch_audio_features(
     track_pairs: list[tuple[str, str]],
     cache_path: str | Path | None = None,
     request_delay: float = 0.1,
+    max_workers: int = 10,
 ) -> pd.DataFrame:
     """
     Fetch Spotify audio features for a list of (artist_name, track_name) pairs.
-    Batches the audio-features API call (50 IDs at a time).
+    Resolves track IDs in parallel, then batch-fetches audio features (50/batch).
 
     Returns
     -------
@@ -206,17 +231,28 @@ def fetch_audio_features(
         len(cache),
     )
 
-    # Step 1: Resolve track IDs
+    # Step 1: Resolve track IDs in parallel
     track_id_map: dict[str, str] = {}
-    for artist, track in tqdm(pairs_to_fetch, desc="Resolving track IDs"):
+    id_map_lock = threading.Lock()
+
+    def _resolve_one(pair: tuple[str, str]) -> None:
+        artist, track = pair
         k = _key(artist, track)
+        thread_sp = build_client()
         try:
-            tid = _search_track(sp, artist, track)
+            tid = _search_track(thread_sp, artist, track)
             if tid:
-                track_id_map[k] = tid
+                with id_map_lock:
+                    track_id_map[k] = tid
         except Exception as exc:
             logger.warning("Could not resolve track '%s - %s': %s", artist, track, exc)
-        time.sleep(request_delay)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_resolve_one, pair) for pair in pairs_to_fetch]
+        with tqdm(total=len(pairs_to_fetch), desc="Resolving track IDs") as pbar:
+            for future in as_completed(futures):
+                future.result()
+                pbar.update(1)
 
     # Step 2: Batch-fetch audio features
     keys = list(track_id_map.keys())
