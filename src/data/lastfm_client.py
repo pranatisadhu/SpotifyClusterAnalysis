@@ -110,9 +110,10 @@ def fetch_user_scrobbles(
         tracks = _fetch_all_recent_tracks(
             network, username, from_ts, to_ts, page_size
         )
-    except pylast.WSError as exc:
-        if "User not found" in str(exc) or "Invalid user" in str(exc):
-            logger.warning("User %s not found on Last.fm — skipping.", username)
+    except (pylast.WSError, pylast.PyLastError) as exc:
+        exc_str = str(exc)
+        if any(msg in exc_str for msg in ("User not found", "Invalid user", "Login", "Forbidden")):
+            logger.warning("User %s inaccessible (%s) — skipping.", username, exc_str[:60])
             return pd.DataFrame(columns=_SCROBBLE_COLS)
         raise
 
