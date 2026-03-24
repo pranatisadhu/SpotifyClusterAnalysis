@@ -111,9 +111,9 @@ def fetch_user_scrobbles(
             network, username, from_ts, to_ts, page_size
         )
     except (pylast.WSError, pylast.PyLastError) as exc:
-        exc_str = str(exc)
+        exc_str = str(exc) + str(exc.__cause__)
         if any(msg in exc_str for msg in ("User not found", "Invalid user", "Login", "Forbidden")):
-            logger.warning("User %s inaccessible (%s) — skipping.", username, exc_str[:60])
+            logger.warning("User %s inaccessible — skipping.", username)
             return pd.DataFrame(columns=_SCROBBLE_COLS)
         raise
 
