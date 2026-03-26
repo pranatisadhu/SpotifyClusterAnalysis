@@ -125,8 +125,9 @@ def compute_genre_diversity(
                 "unique_genres": 0,
                 "genre_entropy": 0.0,
                 f"genre_concentration_{top_n}": 0.0,
-                "avg_genre_tags_per_play": avg_genre_tags,
-            }
+                "avg_genre_tags_per_play": 0.0,
+            },
+            index=avg_genre_tags.index,
         )
 
     genre_counts = (
