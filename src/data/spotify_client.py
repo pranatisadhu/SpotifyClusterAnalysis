@@ -8,6 +8,11 @@ Provides:
   - Audio feature enrichment for tracks (danceability, energy, valence, etc.)
   - Batched calls to stay within Spotify rate limits
   - Persistent cache (Parquet) to avoid redundant API calls across runs
+
+NOTE: Spotify deprecated the audio-features endpoint for apps created after
+November 27 2024. If your app was created after that date, fetch_audio_features()
+will detect the 403 response and return an empty DataFrame immediately rather
+than hanging on retries.
 """
 
 from __future__ import annotations
@@ -22,16 +27,25 @@ import pandas as pd
 import spotipy
 from dotenv import load_dotenv
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.exceptions import SpotifyException
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 from tqdm import tqdm
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True only for errors worth retrying (rate-limit or server errors)."""
+    if isinstance(exc, SpotifyException):
+        # 429 = rate limited, 5xx = server error — both are transient
+        return exc.http_status == 429 or (exc.http_status is not None and exc.http_status >= 500)
+    return True  # non-Spotify exceptions (network glitches) are retried
 
 # Spotify allows up to 50 IDs per batch request for audio features
 _SPOTIFY_BATCH_SIZE = 50
@@ -61,19 +75,61 @@ _ARTIST_GENRE_COLS = [
 
 def build_client() -> spotipy.Spotify:
     """Build a Spotify client using Client Credentials (no user login required)."""
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID", "")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        raise EnvironmentError(
+            "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set in your .env file. "
+            "Copy .env.example to .env and fill in your credentials from "
+            "https://developer.spotify.com/dashboard"
+        )
     return spotipy.Spotify(
         auth_manager=SpotifyClientCredentials(
-            client_id=os.environ["SPOTIFY_CLIENT_ID"],
-            client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
+            client_id=client_id,
+            client_secret=client_secret,
         ),
         requests_timeout=10,
     )
 
 
+def check_credentials() -> dict[str, bool]:
+    """Quick sanity check — verify credentials are set and the API is reachable."""
+    results = {"env_vars_set": False, "api_reachable": False, "audio_features_available": False}
+    cid = os.environ.get("SPOTIFY_CLIENT_ID", "")
+    sec = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+    results["env_vars_set"] = bool(cid and sec)
+    if not results["env_vars_set"]:
+        logger.error("Credentials not set — copy .env.example to .env and fill in values.")
+        return results
+    try:
+        sp = build_client()
+        # Simple search to confirm auth works
+        sp.search(q="test", type="artist", limit=1)
+        results["api_reachable"] = True
+    except SpotifyException as exc:
+        logger.error("API auth failed: %s", exc)
+        return results
+    try:
+        # Probe the audio-features endpoint with a known track ID
+        # (Pink Floyd – Money) — returns 403 on deprecated apps
+        sp.audio_features(["0vFabeTqtOtj918sjc5vYo"])
+        results["audio_features_available"] = True
+    except SpotifyException as exc:
+        if exc.http_status == 403:
+            logger.warning(
+                "audio_features endpoint returned 403 — your Spotify app was created "
+                "after Nov 27 2024 and does not have access to this endpoint. "
+                "fetch_audio_features() will return an empty DataFrame."
+            )
+        else:
+            logger.warning("audio_features probe failed: %s", exc)
+    return results
+
+
 @retry(
-    retry=retry_if_exception_type(Exception),
+    retry=retry_if_exception(_is_transient),
     wait=wait_exponential(multiplier=1, min=1, max=30),
-    stop=stop_after_attempt(5),
+    stop=stop_after_attempt(3),
     reraise=True,
 )
 def _search_artist(sp: spotipy.Spotify, artist_name: str) -> dict | None:
@@ -157,9 +213,9 @@ def fetch_artist_genres(
 
 
 @retry(
-    retry=retry_if_exception_type(Exception),
+    retry=retry_if_exception(_is_transient),
     wait=wait_exponential(multiplier=1, min=1, max=30),
-    stop=stop_after_attempt(5),
+    stop=stop_after_attempt(3),
     reraise=True,
 )
 def _search_track(
@@ -181,6 +237,10 @@ def fetch_audio_features(
     """
     Fetch Spotify audio features for a list of (artist_name, track_name) pairs.
     Batches the audio-features API call (50 IDs at a time).
+
+    NOTE: Spotify removed access to this endpoint for apps created after
+    Nov 27 2024. If your app is affected, this function returns an empty
+    DataFrame immediately with a clear warning rather than hanging.
 
     Returns
     -------
@@ -221,14 +281,29 @@ def fetch_audio_features(
     # Step 2: Batch-fetch audio features
     keys = list(track_id_map.keys())
     ids = list(track_id_map.values())
+    _audio_features_unavailable = False
 
     for batch_start in tqdm(
         range(0, len(ids), _SPOTIFY_BATCH_SIZE), desc="Fetching audio features"
     ):
+        if _audio_features_unavailable:
+            break
         batch_keys = keys[batch_start : batch_start + _SPOTIFY_BATCH_SIZE]
         batch_ids = ids[batch_start : batch_start + _SPOTIFY_BATCH_SIZE]
         try:
             features_list = sp.audio_features(batch_ids)
+        except SpotifyException as exc:
+            if exc.http_status == 403:
+                logger.warning(
+                    "audio_features endpoint returned 403 — this endpoint was removed "
+                    "for Spotify apps created after Nov 27 2024. Skipping audio feature "
+                    "enrichment. See https://developer.spotify.com/blog/2024-11-27-changes"
+                )
+                _audio_features_unavailable = True
+                features_list = [None] * len(batch_ids)
+            else:
+                logger.warning("Batch audio features failed: %s", exc)
+                features_list = [None] * len(batch_ids)
         except Exception as exc:
             logger.warning("Batch audio features failed: %s", exc)
             features_list = [None] * len(batch_ids)
