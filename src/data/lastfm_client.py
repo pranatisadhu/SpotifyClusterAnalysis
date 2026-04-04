@@ -56,6 +56,7 @@ def build_network() -> pylast.LastFMNetwork:
         api_secret=api_secret,
         username=username or None,
         password_hash=password_hash or None,
+        timeout=5,
     )
 
 
