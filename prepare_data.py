@@ -182,7 +182,27 @@ def step4_stub_audio_features() -> pd.DataFrame:
     return stub
 
 
+def stub_artist_genres() -> pd.DataFrame:
+    """Save an empty artist_genres parquet so notebooks run without Spotify."""
+    genres_path = PROCESSED / "artist_genres.parquet"
+    empty = pd.DataFrame(
+        columns=["artist_name_normalized", "spotify_artist_id", "genres", "popularity"]
+    )
+    empty.to_parquet(genres_path, index=False)
+    logger.info("Empty artist_genres.parquet saved (genre features will be blank).")
+    return empty
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skip-genres", action="store_true",
+        help="Skip Spotify genre fetch and save an empty stub instead. "
+             "Use this to get all files generated immediately."
+    )
+    args = parser.parse_args()
+
     print("\n" + "=" * 60)
     print("  Spotify Cluster Analysis — Data Preparation")
     print("=" * 60 + "\n")
@@ -191,8 +211,18 @@ def main():
 
     scrobbles = step1_load_scrobbles()
     profiles = step2_load_profiles()
-    artist_genres = step3_fetch_artist_genres(scrobbles)
-    audio_features = step4_stub_audio_features()
+
+    if args.skip_genres:
+        logger.info("Step 3/4 — Skipping Spotify genre fetch (--skip-genres flag set).")
+        genres_path = PROCESSED / "artist_genres.parquet"
+        if genres_path.exists():
+            logger.info("artist_genres.parquet already exists — leaving it as-is.")
+        else:
+            stub_artist_genres()
+    else:
+        step3_fetch_artist_genres(scrobbles)
+
+    step4_stub_audio_features()
 
     print("\n" + "=" * 60)
     print("  All done. Files in data/processed/:")
