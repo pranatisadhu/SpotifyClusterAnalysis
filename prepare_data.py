@@ -108,14 +108,26 @@ def step2_load_profiles() -> pd.DataFrame:
     return profiles
 
 
-def step3_fetch_artist_genres(scrobbles: pd.DataFrame) -> pd.DataFrame:
+def step3_fetch_artist_genres(scrobbles: pd.DataFrame, retry_empty: bool = False) -> pd.DataFrame:
     """Fetch genre tags for all meaningful artists using Last.fm tags."""
     genres_path = PROCESSED / "artist_genres.parquet"
+
+    if retry_empty and genres_path.exists():
+        df = pd.read_parquet(genres_path)
+        empty_count = df["genres"].apply(lambda g: len(g) == 0 if isinstance(g, list) else True).sum()
+        if empty_count > 0:
+            logger.info(
+                "Clearing %s artists with empty genres from cache so they are retried.",
+                f"{empty_count:,}",
+            )
+            df_keep = df[df["genres"].apply(lambda g: isinstance(g, list) and len(g) > 0)]
+            df_keep.to_parquet(genres_path, index=False)
+            logger.info("%s artists with tags kept in cache.", f"{len(df_keep):,}")
 
     if genres_path.exists():
         df = pd.read_parquet(genres_path)
         # If it's an empty stub from --skip-genres, don't treat it as complete
-        if len(df) > 0:
+        if len(df) > 0 and not retry_empty:
             logger.info(
                 "artist_genres.parquet already exists (%s artists) — skipping fetch.",
                 len(df),
@@ -207,8 +219,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--skip-genres", action="store_true",
-        help="Skip Spotify genre fetch and save an empty stub instead. "
-             "Use this to get all files generated immediately."
+        help="Skip genre fetch and save an empty stub instead."
+    )
+    parser.add_argument(
+        "--retry-empty", action="store_true",
+        help="Re-fetch artists that previously got empty tags (e.g. due to network dropout)."
     )
     args = parser.parse_args()
 
@@ -222,14 +237,14 @@ def main():
     profiles = step2_load_profiles()
 
     if args.skip_genres:
-        logger.info("Step 3/4 — Skipping Spotify genre fetch (--skip-genres flag set).")
+        logger.info("Step 3/4 — Skipping genre fetch (--skip-genres flag set).")
         genres_path = PROCESSED / "artist_genres.parquet"
         if genres_path.exists():
             logger.info("artist_genres.parquet already exists — leaving it as-is.")
         else:
             stub_artist_genres()
     else:
-        step3_fetch_artist_genres(scrobbles)
+        step3_fetch_artist_genres(scrobbles, retry_empty=args.retry_empty)
 
     step4_stub_audio_features()
 
