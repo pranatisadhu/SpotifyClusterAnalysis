@@ -133,11 +133,13 @@ def step3_fetch_artist_genres(scrobbles: pd.DataFrame) -> pd.DataFrame:
         )
         empty.to_parquet(genres_path, index=False)
         return empty
-    unique_artists = scrobbles["artist_name"].dropna().unique().tolist()
+    artist_counts = scrobbles["artist_name"].dropna().value_counts()
+    unique_artists = artist_counts[artist_counts > 5].index.tolist()
     logger.info(
-        "Step 3/4 — Fetching genres for %s unique artists (this takes a while — "
-        "progress shown below)...",
+        "Step 3/4 — Fetching genres for %s artists with >5 plays "
+        "(skipping %s tail artists)...",
         f"{len(unique_artists):,}",
+        f"{(artist_counts <= 5).sum():,}",
     )
     artist_genres = fetch_artist_genres(
         sp,
