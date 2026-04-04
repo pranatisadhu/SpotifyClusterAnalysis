@@ -104,11 +104,12 @@ def fetch_user_scrobbles(
 
     try:
         tracks = _fetch_recent_tracks(network, username, from_ts, to_ts)
-    except pylast.WSError as exc:
+    except (pylast.WSError, pylast.PyLastError) as exc:
         if "User not found" in str(exc) or "Invalid user" in str(exc):
             logger.warning("User %s not found on Last.fm — skipping.", username)
             return pd.DataFrame(columns=_SCROBBLE_COLS)
-        raise
+        logger.warning("Error fetching %s: %s — skipping.", username, exc)
+        return pd.DataFrame(columns=_SCROBBLE_COLS)
 
     if not tracks:
         logger.info("  %s: no scrobbles in lookback window.", username)
