@@ -151,6 +151,19 @@ def compute_audio_feature_profile(
         "acousticness", "instrumentalness", "liveness", "speechiness",
     ]
 
+    # If audio features are unavailable (e.g. Spotify endpoint deprecated),
+    # return a DataFrame of NaNs so the feature matrix still assembles cleanly.
+    if audio_features is None or audio_features.empty or not all(
+        c in audio_features.columns for c in audio_cols
+    ):
+        user_ids = scrobbles["userid"].unique()
+        empty = pd.DataFrame(
+            index=pd.Index(user_ids, name="userid"),
+            columns=[f"mean_{c}" for c in audio_cols],
+            dtype=float,
+        )
+        return empty
+
     # Build track_key in scrobbles
     sc = scrobbles.copy()
     sc["track_key"] = (
