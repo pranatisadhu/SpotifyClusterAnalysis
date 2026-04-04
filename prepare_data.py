@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.data.loader import load_scrobbles, load_profiles, load_config
 from src.data.spotify_client import build_client, fetch_artist_genres
+from src.data.lastfm_client import build_network, fetch_artist_genres_lastfm
 
 PROCESSED = Path("data/processed")
 RAW = Path("data/raw")
@@ -108,23 +109,33 @@ def step2_load_profiles() -> pd.DataFrame:
 
 
 def step3_fetch_artist_genres(scrobbles: pd.DataFrame) -> pd.DataFrame:
-    """Fetch Spotify genre tags for all unique artists."""
+    """Fetch genre tags for all meaningful artists using Last.fm tags."""
     genres_path = PROCESSED / "artist_genres.parquet"
 
     if genres_path.exists():
         df = pd.read_parquet(genres_path)
-        logger.info(
-            "artist_genres.parquet already exists (%s artists) — skipping fetch.",
-            len(df),
-        )
-        return df
+        # If it's an empty stub from --skip-genres, don't treat it as complete
+        if len(df) > 0:
+            logger.info(
+                "artist_genres.parquet already exists (%s artists) — skipping fetch.",
+                len(df),
+            )
+            return df
 
-    logger.info("Step 3/4 — Connecting to Spotify...")
+    artist_counts = scrobbles["artist_name"].dropna().value_counts()
+    unique_artists = artist_counts[artist_counts > 5].index.tolist()
+    logger.info(
+        "Step 3/4 — Fetching genre tags via Last.fm for %s artists with >5 plays "
+        "(skipping %s tail artists)...",
+        f"{len(unique_artists):,}",
+        f"{(artist_counts <= 5).sum():,}",
+    )
+
     try:
-        sp = build_client()
+        network = build_network()
     except Exception as exc:
         logger.warning(
-            "Could not build Spotify client: %s\n"
+            "Could not connect to Last.fm: %s\n"
             "Saving empty artist_genres.parquet — genre features will be blank.",
             exc,
         )
@@ -133,22 +144,20 @@ def step3_fetch_artist_genres(scrobbles: pd.DataFrame) -> pd.DataFrame:
         )
         empty.to_parquet(genres_path, index=False)
         return empty
-    artist_counts = scrobbles["artist_name"].dropna().value_counts()
-    unique_artists = artist_counts[artist_counts > 5].index.tolist()
-    logger.info(
-        "Step 3/4 — Fetching genres for %s artists with >5 plays "
-        "(skipping %s tail artists)...",
-        f"{len(unique_artists):,}",
-        f"{(artist_counts <= 5).sum():,}",
-    )
-    artist_genres = fetch_artist_genres(
-        sp,
+
+    artist_genres = fetch_artist_genres_lastfm(
+        network,
         unique_artists,
         cache_path=str(genres_path),
-        request_delay=0.1,
+        top_n_tags=5,
+        request_delay=0.2,
     )
-    matched = artist_genres["spotify_artist_id"].notna().sum()
-    logger.info("Artist genres saved: %s / %s matched on Spotify.", matched, len(artist_genres))
+    matched = artist_genres["genres"].apply(lambda g: len(g) > 0).sum()
+    logger.info(
+        "Artist genres saved: %s / %s artists had tags.",
+        f"{matched:,}",
+        f"{len(artist_genres):,}",
+    )
     return artist_genres
 
 

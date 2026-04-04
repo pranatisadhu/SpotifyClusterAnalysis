@@ -220,6 +220,83 @@ def fetch_all_users(
     return combined
 
 
+def fetch_artist_genres_lastfm(
+    network: pylast.LastFMNetwork,
+    artist_names: list[str],
+    cache_path: str | Path | None = None,
+    top_n_tags: int = 5,
+    request_delay: float = 0.2,
+) -> pd.DataFrame:
+    """
+    Fetch genre tags for each artist using Last.fm's artist.getTopTags endpoint.
+    Returns the same schema as the Spotify genre lookup so the rest of the
+    pipeline works without modification.
+
+    Parameters
+    ----------
+    network : authenticated pylast LastFMNetwork
+    artist_names : list of artist name strings
+    cache_path : path to a Parquet cache (safe to re-run — already-fetched artists skipped)
+    top_n_tags : how many top tags to keep per artist
+    request_delay : seconds between API calls
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        artist_name_normalized, spotify_artist_id (None), genres (list[str]), popularity (None)
+    """
+    def _norm(name: str) -> str:
+        return name.strip().lower()
+
+    cache: dict[str, dict] = {}
+    if cache_path and Path(cache_path).exists():
+        cached_df = pd.read_parquet(cache_path)
+        for _, row in cached_df.iterrows():
+            cache[row["artist_name_normalized"]] = row.to_dict()
+        logger.info("Loaded %d cached artist tags from %s.", len(cache), cache_path)
+
+    names_to_fetch = [n for n in artist_names if _norm(n) not in cache]
+    logger.info(
+        "Last.fm artist tags: %d new artists to fetch (cache has %d).",
+        len(names_to_fetch),
+        len(cache),
+    )
+
+    for name in tqdm(names_to_fetch, desc="Fetching artist tags (Last.fm)"):
+        norm = _norm(name)
+        try:
+            artist = network.get_artist(name)
+            top_tags = artist.get_top_tags(limit=top_n_tags)
+            genres = [t.item.get_name().lower() for t in top_tags if t.item]
+        except pylast.WSError as exc:
+            if "Artist not found" in str(exc) or "not found" in str(exc).lower():
+                genres = []
+            else:
+                logger.warning("WSError for '%s': %s", name, exc)
+                genres = []
+        except Exception as exc:
+            logger.warning("Failed to fetch tags for '%s': %s", name, exc)
+            genres = []
+
+        cache[norm] = {
+            "artist_name_normalized": norm,
+            "spotify_artist_id": None,
+            "genres": genres,
+            "popularity": None,
+        }
+        time.sleep(request_delay)
+
+    cols = ["artist_name_normalized", "spotify_artist_id", "genres", "popularity"]
+    df = pd.DataFrame(list(cache.values()), columns=cols)
+
+    if cache_path:
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+        logger.info("Artist tag cache saved to %s (%d entries).", cache_path, len(df))
+
+    return df
+
+
 def get_user_top_artists(
     network: pylast.LastFMNetwork,
     username: str,
