@@ -70,7 +70,7 @@ def load_scrobbles(
         tsv_path,
         sep="\t",
         names=_SCROBBLE_COLS,
-        header=None,
+        header=0,
         encoding="utf-8",
         on_bad_lines="skip",
         chunksize=chunksize,
@@ -116,7 +116,7 @@ def load_profiles(tsv_path: str | Path, save_parquet: str | Path | None = None) 
         tsv_path,
         sep="\t",
         names=_PROFILE_COLS,
-        header=None,
+        header=0,
         encoding="utf-8",
         on_bad_lines="skip",
     )

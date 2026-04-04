@@ -65,21 +65,18 @@ def build_network() -> pylast.LastFMNetwork:
     stop=stop_after_attempt(5),
     reraise=True,
 )
-def _fetch_recent_tracks_page(
+def _fetch_recent_tracks(
     network: pylast.LastFMNetwork,
     username: str,
     from_ts: int,
     to_ts: int,
-    page: int,
-    page_size: int,
 ) -> list[pylast.PlayedTrack]:
-    """Fetch one page of recent tracks for a user. Retries on transient errors."""
+    """Fetch all recent tracks for a user. Retries on transient errors."""
     user = network.get_user(username)
     return user.get_recent_tracks(
-        limit=page_size,
+        limit=None,
         time_from=from_ts,
         time_to=to_ts,
-        page=page,
     )
 
 
@@ -103,47 +100,33 @@ def fetch_user_scrobbles(
     from_ts = int(from_dt.timestamp())
     to_ts = int(now.timestamp())
 
-    records: list[dict] = []
-    page = 1
+    logger.debug("Fetching scrobbles for %s...", username)
 
-    logger.debug("Fetching scrobbles for %s (pages)...", username)
+    try:
+        tracks = _fetch_recent_tracks(network, username, from_ts, to_ts)
+    except pylast.WSError as exc:
+        if "User not found" in str(exc) or "Invalid user" in str(exc):
+            logger.warning("User %s not found on Last.fm — skipping.", username)
+            return pd.DataFrame(columns=_SCROBBLE_COLS)
+        raise
 
-    while True:
-        try:
-            tracks = _fetch_recent_tracks_page(
-                network, username, from_ts, to_ts, page, page_size
-            )
-        except pylast.WSError as exc:
-            if "User not found" in str(exc) or "Invalid user" in str(exc):
-                logger.warning("User %s not found on Last.fm — skipping.", username)
-                return pd.DataFrame(columns=_SCROBBLE_COLS)
-            raise
-
-        if not tracks:
-            break
-
-        for played in tracks:
-            track = played.track
-            records.append(
-                {
-                    "userid": username,
-                    "timestamp": pd.to_datetime(int(played.timestamp), unit="s", utc=True),
-                    "artist_mbid": "",
-                    "artist_name": track.artist.name if track.artist else "",
-                    "track_mbid": "",
-                    "track_name": track.title,
-                }
-            )
-
-        if len(tracks) < page_size:
-            break
-
-        page += 1
-        time.sleep(request_delay)
-
-    if not records:
+    if not tracks:
         logger.info("  %s: no scrobbles in lookback window.", username)
         return pd.DataFrame(columns=_SCROBBLE_COLS)
+
+    records: list[dict] = []
+    for played in tracks:
+        track = played.track
+        records.append(
+            {
+                "userid": username,
+                "timestamp": pd.to_datetime(int(played.timestamp), unit="s", utc=True),
+                "artist_mbid": "",
+                "artist_name": track.artist.name if track.artist else "",
+                "track_mbid": "",
+                "track_name": track.title,
+            }
+        )
 
     df = pd.DataFrame(records)
     logger.debug("  %s: fetched %d scrobbles.", username, len(df))
