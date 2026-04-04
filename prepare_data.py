@@ -46,7 +46,7 @@ load_dotenv(Path(__file__).parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.data.loader import load_scrobbles, load_profiles, load_config
-from src.data.spotify_client import build_client, check_credentials, fetch_artist_genres
+from src.data.spotify_client import build_client, fetch_artist_genres
 
 PROCESSED = Path("data/processed")
 RAW = Path("data/raw")
@@ -119,24 +119,20 @@ def step3_fetch_artist_genres(scrobbles: pd.DataFrame) -> pd.DataFrame:
         )
         return df
 
-    logger.info("Step 3/4 — Checking Spotify credentials...")
-    status = check_credentials()
-    print(f"  env vars set:     {status['env_vars_set']}")
-    print(f"  API reachable:    {status['api_reachable']}")
-    print(f"  audio features:   {status['audio_features_available']} (expected False for new apps)")
-
-    if not status["api_reachable"]:
+    logger.info("Step 3/4 — Connecting to Spotify...")
+    try:
+        sp = build_client()
+    except Exception as exc:
         logger.warning(
-            "Spotify API not reachable. Saving empty artist_genres.parquet.\n"
-            "Genre diversity features will be zeroed out but clustering will still run."
+            "Could not build Spotify client: %s\n"
+            "Saving empty artist_genres.parquet — genre features will be blank.",
+            exc,
         )
         empty = pd.DataFrame(
             columns=["artist_name_normalized", "spotify_artist_id", "genres", "popularity"]
         )
         empty.to_parquet(genres_path, index=False)
         return empty
-
-    sp = build_client()
     unique_artists = scrobbles["artist_name"].dropna().unique().tolist()
     logger.info(
         "Step 3/4 — Fetching genres for %s unique artists (this takes a while — "
