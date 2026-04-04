@@ -168,11 +168,17 @@ def fetch_all_users(
     all_frames: list[pd.DataFrame] = []
 
     for uid in tqdm(userids, desc="Fetching Last.fm scrobbles"):
-        user_path = (save_dir / f"{uid}.parquet") if save_dir else None
+        parquet_path = (save_dir / f"{uid}.parquet") if save_dir else None
+        csv_path = (save_dir / f"{uid}.csv") if save_dir else None
 
-        if resume and user_path and user_path.exists():
-            df_user = pd.read_parquet(user_path)
-            logger.debug("Resumed %s from cache (%d rows).", uid, len(df_user))
+        if resume and parquet_path and parquet_path.exists():
+            df_user = pd.read_parquet(parquet_path)
+            logger.debug("Resumed %s from parquet cache (%d rows).", uid, len(df_user))
+        elif resume and csv_path and csv_path.exists():
+            df_user = pd.read_csv(csv_path)
+            if "timestamp" in df_user.columns:
+                df_user["timestamp"] = pd.to_datetime(df_user["timestamp"], utc=True, errors="coerce")
+            logger.debug("Resumed %s from CSV cache (%d rows).", uid, len(df_user))
         else:
             df_user = fetch_user_scrobbles(
                 network,
@@ -181,8 +187,8 @@ def fetch_all_users(
                 page_size=page_size,
                 request_delay=request_delay,
             )
-            if len(df_user) >= min_scrobbles and user_path:
-                df_user.to_parquet(user_path, index=False)
+            if len(df_user) >= min_scrobbles and parquet_path:
+                df_user.to_parquet(parquet_path, index=False)
 
         if len(df_user) >= min_scrobbles:
             all_frames.append(df_user)

@@ -135,11 +135,22 @@ def load_profiles(tsv_path: str | Path, save_parquet: str | Path | None = None) 
 
 
 def load_parquet(path: str | Path) -> pd.DataFrame:
-    """Load a saved Parquet file."""
+    """Load a saved Parquet file, falling back to a CSV with the same name."""
     path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Parquet file not found: {path}")
-    return pd.read_parquet(path)
+    if path.exists():
+        return pd.read_parquet(path)
+    csv_path = path.with_suffix(".csv")
+    if csv_path.exists():
+        logger.info("Parquet not found; loading CSV fallback: %s", csv_path)
+        df = pd.read_csv(csv_path)
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        if "age" in df.columns:
+            df["age"] = pd.to_numeric(df["age"], errors="coerce")
+        if "signup" in df.columns:
+            df["signup"] = pd.to_datetime(df["signup"], errors="coerce")
+        return df
+    raise FileNotFoundError(f"Neither {path} nor {csv_path} found.")
 
 
 def make_sample(
