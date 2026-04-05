@@ -239,6 +239,28 @@ def run_clustering_pipeline(
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         logger.info("HDBSCAN found %d clusters (%d noise points).",
                     n_clusters, (labels == -1).sum())
+
+        # Reject degenerate HDBSCAN result: if one cluster holds >60% of
+        # non-noise users the solution is not meaningful for persona analysis
+        non_noise = labels[labels != -1]
+        if len(non_noise) > 0:
+            dominant_fraction = np.bincount(non_noise).max() / len(non_noise)
+            if dominant_fraction > 0.60:
+                logger.warning(
+                    "HDBSCAN degenerate: largest cluster contains %.0f%% of users. "
+                    "Forcing silhouette to 0 so KMeans is selected.",
+                    dominant_fraction * 100,
+                )
+                sil, db, ch = 0.0, 0.0, 0.0
+                return ClusterResult(
+                    labels=labels, algorithm=algorithm, n_clusters=n_clusters,
+                    silhouette=0.0, davies_bouldin=0.0, calinski_harabasz=0.0,
+                    feature_matrix_scaled=X_scaled, feature_names=feature_names,
+                    umap_coords=None,
+                    pca_variance_explained=(
+                        pca_obj.explained_variance_ratio_ if pca_obj else None
+                    ),
+                )
     else:
         raise ValueError(f"Unknown algorithm: {algorithm!r}. Choose 'kmeans' or 'hdbscan'.")
 
