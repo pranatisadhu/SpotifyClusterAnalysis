@@ -51,13 +51,14 @@ def build_network() -> pylast.LastFMNetwork:
     username = os.environ.get("LASTFM_USERNAME", "")
     password_hash = os.environ.get("LASTFM_PASSWORD_HASH", "")
 
-    return pylast.LastFMNetwork(
+    network = pylast.LastFMNetwork(
         api_key=api_key,
         api_secret=api_secret,
         username=username or None,
         password_hash=password_hash or None,
-        timeout=5,
     )
+    network.timeout = 5
+    return network
 
 
 @retry(
