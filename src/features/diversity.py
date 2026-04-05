@@ -104,7 +104,7 @@ def compute_genre_diversity(
         how="left",
     )
     merged["genres"] = merged["genres"].apply(
-        lambda x: x if isinstance(x, list) else []
+        lambda x: list(x) if x is not None and not isinstance(x, float) else []
     )
 
     # Average genre tags per play
