@@ -61,8 +61,13 @@ def build_feature_matrix(
     logger.info("Computing engagement and discovery features...")
     engagement = compute_engagement_features(scrobbles, session_gap_minutes=session_gap)
 
-    logger.info("Computing audio feature profile...")
-    audio_profile = compute_audio_feature_profile(scrobbles, audio_features)
+    # Only compute audio features if data is available (Spotify endpoint deprecated for new apps)
+    audio_features_available = (
+        audio_features is not None
+        and not audio_features.empty
+        and "danceability" in audio_features.columns
+        and audio_features["danceability"].notna().any()
+    )
 
     # Combine all feature blocks
     feature_matrix = (
@@ -70,8 +75,14 @@ def build_feature_matrix(
         .join(genre_div, how="outer")
         .join(temporal, how="outer")
         .join(engagement, how="outer")
-        .join(audio_profile, how="outer")
     )
+
+    if audio_features_available:
+        logger.info("Computing audio feature profile...")
+        audio_profile = compute_audio_feature_profile(scrobbles, audio_features)
+        feature_matrix = feature_matrix.join(audio_profile, how="outer")
+    else:
+        logger.info("Skipping audio features — Spotify endpoint unavailable.")
 
     # Optionally join demographic features (used as descriptive, not clustering inputs)
     if profiles is not None:
