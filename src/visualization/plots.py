@@ -353,9 +353,9 @@ def plot_temporal_heatmap(
 
 
 def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
-    """Save a Plotly figure to HTML and optionally to static formats."""
+    """Save a Plotly figure to HTML and PNG (and any additional formats requested)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(str(path.with_suffix(".html")))
-    for fmt in (formats or []):
+    for fmt in (formats or ["png"]):
         fig.write_image(str(path.with_suffix(f".{fmt}")))
