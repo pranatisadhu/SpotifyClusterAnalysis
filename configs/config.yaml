@@ -42,8 +42,8 @@ clustering:
     n_init: 20
     random_state: 42
   hdbscan:
-    min_cluster_size: 10
-    min_samples: 5
+    min_cluster_size: 150
+    min_samples: 15
     metric: euclidean
   # Scaler to apply before clustering
   scaler: standard
