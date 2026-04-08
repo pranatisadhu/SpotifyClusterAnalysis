@@ -152,10 +152,16 @@ def plot_feature_importance(
 
 def plot_elbow(
     elbow_df: pd.DataFrame,
+    best_k: int | None = None,
     title: str = "KMeans Model Selection: Elbow + Silhouette",
 ) -> go.Figure:
     """
     Dual-axis chart: inertia (left axis) and silhouette score (right axis) vs k.
+
+    Parameters
+    ----------
+    elbow_df : DataFrame with columns [k, inertia, silhouette] for every k in the sweep
+    best_k   : optional; draws a dashed vertical line marking the selected k
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -182,6 +188,26 @@ def plot_elbow(
         secondary_y=True,
     )
 
+    k_min = int(elbow_df["k"].min())
+    k_max = int(elbow_df["k"].max())
+
+    if best_k is not None:
+        fig.add_vline(
+            x=best_k,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text=f"Best k={best_k}",
+            annotation_position="top right",
+        )
+
+    # Force one tick per integer k value so every k in the sweep is labelled.
+    # Without this, Plotly's auto dtick often shows only a subset (e.g. k=5).
+    fig.update_xaxes(
+        tickmode="linear",
+        tick0=k_min,
+        dtick=1,
+        range=[k_min - 0.5, k_max + 0.5],
+    )
     fig.update_layout(
         title=title,
         xaxis_title="Number of Clusters (k)",
