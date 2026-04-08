@@ -184,7 +184,12 @@ def plot_elbow(
 
     fig.update_layout(
         title=title,
-        xaxis_title="Number of Clusters (k)",
+        xaxis=dict(
+            title="Number of Clusters (k)",
+            tickmode="linear",
+            dtick=1,
+            tick0=int(elbow_df["k"].min()),
+        ),
         template="plotly_white",
     )
     fig.update_yaxes(title_text="Inertia", secondary_y=False)

@@ -55,6 +55,7 @@ class ClusterResult:
     umap_coords: np.ndarray | None = None  # (n_users, 2)
     pca_variance_explained: np.ndarray | None = None
     model: Any = field(default=None, repr=False)
+    kmeans_sweep: dict | None = None  # kmeans only: {'sil_scores': {k: float}, 'inertias': {k: float}}
 
 
 def _select_features(feature_matrix: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -218,6 +219,7 @@ def run_clustering_pipeline(
         X_input = X_scaled
 
     # Cluster
+    _kmeans_sweep = None
     if algorithm == "kmeans":
         k_range_val = (
             km_cfg.get("n_clusters_range", [3, 10])[0],
@@ -229,6 +231,7 @@ def run_clustering_pipeline(
             n_init=km_cfg.get("n_init", 20),
             random_state=km_cfg.get("random_state", 42),
         )
+        _kmeans_sweep = {"sil_scores": sil_scores, "inertias": inertias}
     elif algorithm == "hdbscan":
         labels = cluster_hdbscan(
             X_input,
@@ -281,4 +284,5 @@ def run_clustering_pipeline(
         pca_variance_explained=(
             pca_obj.explained_variance_ratio_ if pca_obj else None
         ),
+        kmeans_sweep=_kmeans_sweep,
     )
