@@ -217,6 +217,20 @@ def run_clustering_pipeline(
     else:
         X_input = X_scaled
 
+    # UMAP embedding — computed before HDBSCAN so the low-dimensional
+    # representation can be used as clustering input (avoids curse of
+    # dimensionality that causes all points to be labelled noise in ≥10-D).
+    umap_coords = None
+    if use_umap_viz:
+        logger.info("Computing UMAP 2D embedding...")
+        umap_coords = embed_umap(
+            X_input,
+            n_components=umap_cfg.get("n_components", 2),
+            n_neighbors=umap_cfg.get("n_neighbors", 15),
+            min_dist=umap_cfg.get("min_dist", 0.1),
+            random_state=umap_cfg.get("random_state", 42),
+        )
+
     # Cluster
     if algorithm == "kmeans":
         k_range_val = (
@@ -230,8 +244,11 @@ def run_clustering_pipeline(
             random_state=km_cfg.get("random_state", 42),
         )
     elif algorithm == "hdbscan":
+        # Prefer the 2-D UMAP embedding as HDBSCAN input; fall back to
+        # PCA-reduced features when UMAP is unavailable.
+        hdb_input = umap_coords if umap_coords is not None else X_input
         labels = cluster_hdbscan(
-            X_input,
+            hdb_input,
             min_cluster_size=hdb_cfg.get("min_cluster_size", 10),
             min_samples=hdb_cfg.get("min_samples", 5),
             metric=hdb_cfg.get("metric", "euclidean"),
@@ -243,11 +260,12 @@ def run_clustering_pipeline(
         raise ValueError(f"Unknown algorithm: {algorithm!r}. Choose 'kmeans' or 'hdbscan'.")
 
     # Compute evaluation metrics (excluding noise for HDBSCAN)
+    eval_input = umap_coords if (algorithm == "hdbscan" and umap_coords is not None) else X_input
     mask = labels != -1
     if mask.sum() > 1 and len(set(labels[mask])) > 1:
-        sil = silhouette_score(X_input[mask], labels[mask])
-        db = davies_bouldin_score(X_input[mask], labels[mask])
-        ch = calinski_harabasz_score(X_input[mask], labels[mask])
+        sil = silhouette_score(eval_input[mask], labels[mask])
+        db = davies_bouldin_score(eval_input[mask], labels[mask])
+        ch = calinski_harabasz_score(eval_input[mask], labels[mask])
     else:
         sil, db, ch = 0.0, 0.0, 0.0
 
@@ -255,18 +273,6 @@ def run_clustering_pipeline(
         "Cluster metrics — Silhouette: %.4f | Davies-Bouldin: %.4f | Calinski-Harabasz: %.1f",
         sil, db, ch,
     )
-
-    # UMAP for visualisation
-    umap_coords = None
-    if use_umap_viz:
-        logger.info("Computing UMAP 2D embedding...")
-        umap_coords = embed_umap(
-            X_input,
-            n_components=umap_cfg.get("n_components", 2),
-            n_neighbors=umap_cfg.get("n_neighbors", 15),
-            min_dist=umap_cfg.get("min_dist", 0.1),
-            random_state=umap_cfg.get("random_state", 42),
-        )
 
     return ClusterResult(
         labels=labels,
