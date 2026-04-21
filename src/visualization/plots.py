@@ -10,7 +10,8 @@ Functions:
   - plot_umap_clusters      : 2D UMAP scatter coloured by cluster
   - plot_cluster_radar      : radar/spider chart of cluster feature profiles
   - plot_feature_importance : horizontal bar chart of RF feature importance
-  - plot_elbow              : KMeans elbow + silhouette dual-axis chart
+  - plot_elbow_inertia      : KMeans elbow (inertia) chart
+  - plot_elbow_silhouette   : KMeans silhouette score chart
   - plot_cluster_heatmap    : heatmap of normalised feature means per cluster
   - plot_genre_distribution : stacked bar of top genres per cluster
   - plot_temporal_heatmap   : listening activity by hour × day-of-week per cluster
@@ -24,7 +25,6 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 _PALETTE = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
@@ -150,27 +150,36 @@ def plot_feature_importance(
     return fig
 
 
-def plot_elbow(
+def plot_elbow_inertia(
     elbow_df: pd.DataFrame,
-    title: str = "KMeans Model Selection: Elbow + Silhouette",
+    title: str = "KMeans Elbow Curve (Inertia vs k)",
 ) -> go.Figure:
-    """
-    Dual-axis chart: inertia (left axis) and silhouette score (right axis) vs k.
-    """
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    fig.add_trace(
+    """Line chart of KMeans inertia vs number of clusters k."""
+    fig = go.Figure(
         go.Scatter(
             x=elbow_df["k"],
             y=elbow_df["inertia"],
-            name="Inertia (Elbow)",
+            name="Inertia",
             mode="lines+markers",
             marker=dict(size=8),
             line=dict(color="#636EFA"),
-        ),
-        secondary_y=False,
+        )
     )
-    fig.add_trace(
+    fig.update_layout(
+        title=title,
+        xaxis_title="Number of Clusters (k)",
+        yaxis_title="Inertia",
+        template="plotly_white",
+    )
+    return fig
+
+
+def plot_elbow_silhouette(
+    elbow_df: pd.DataFrame,
+    title: str = "KMeans Silhouette Score vs k",
+) -> go.Figure:
+    """Line chart of KMeans silhouette score vs number of clusters k."""
+    fig = go.Figure(
         go.Scatter(
             x=elbow_df["k"],
             y=elbow_df["silhouette"],
@@ -178,17 +187,14 @@ def plot_elbow(
             mode="lines+markers",
             marker=dict(size=8, symbol="diamond"),
             line=dict(color="#EF553B"),
-        ),
-        secondary_y=True,
+        )
     )
-
     fig.update_layout(
         title=title,
         xaxis_title="Number of Clusters (k)",
+        yaxis_title="Silhouette Score",
         template="plotly_white",
     )
-    fig.update_yaxes(title_text="Inertia", secondary_y=False)
-    fig.update_yaxes(title_text="Silhouette Score", secondary_y=True)
     return fig
 
 
@@ -353,9 +359,9 @@ def plot_temporal_heatmap(
 
 
 def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
-    """Save a Plotly figure to HTML and optionally to static formats."""
+    """Save a Plotly figure to EPS and optionally other formats."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(str(path.with_suffix(".html")))
+    fig.write_image(str(path.with_suffix(".eps")), format="eps")
     for fmt in (formats or []):
         fig.write_image(str(path.with_suffix(f".{fmt}")))
