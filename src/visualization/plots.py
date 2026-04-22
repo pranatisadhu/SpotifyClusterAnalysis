@@ -278,7 +278,7 @@ def plot_genre_distribution(
         on="artist_name_normalized",
         how="left",
     )
-    merged["genres"] = merged["genres"].apply(lambda x: x if isinstance(x, list) else [])
+    merged["genres"] = merged["genres"].apply(lambda x: list(x) if isinstance(x, (list, np.ndarray)) else [])
     exploded = merged.explode("genres").dropna(subset=["genres"])
     exploded = exploded[exploded["genres"] != ""]
 
