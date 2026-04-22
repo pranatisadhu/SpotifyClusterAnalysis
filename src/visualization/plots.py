@@ -359,9 +359,9 @@ def plot_temporal_heatmap(
 
 
 def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
-    """Save a Plotly figure to EPS and optionally other formats."""
+    """Save a Plotly figure to PDF and optionally other formats."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_image(str(path.with_suffix(".eps")), format="eps")
+    fig.write_image(str(path.with_suffix(".pdf")), format="pdf")
     for fmt in (formats or []):
         fig.write_image(str(path.with_suffix(f".{fmt}")))
