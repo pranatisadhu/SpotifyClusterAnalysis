@@ -17,10 +17,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, AgglomerativeClustering, SpectralClustering
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 try:
@@ -180,6 +181,75 @@ def cluster_hdbscan(
     return clusterer.fit_predict(X)
 
 
+def cluster_gmm(
+    X: np.ndarray,
+    k_range: tuple[int, int] = (3, 10),
+    random_state: int = 42,
+) -> tuple[np.ndarray, int, float, float]:
+    """
+    Gaussian Mixture Model sweep over k_range; select k via BIC.
+
+    Returns
+    -------
+    best_labels, best_k, best_bic, best_aic
+    """
+    best_labels = None
+    best_k = k_range[0]
+    best_bic = np.inf
+
+    for k in range(k_range[0], k_range[1] + 1):
+        gmm = GaussianMixture(n_components=k, random_state=random_state, n_init=5)
+        gmm.fit(X)
+        bic = gmm.bic(X)
+        logger.info("  GMM k=%d → BIC=%.1f, AIC=%.1f", k, bic, gmm.aic(X))
+        if bic < best_bic:
+            best_bic = bic
+            best_k = k
+            best_gmm = gmm
+
+    best_labels = best_gmm.predict(X)
+    best_aic = best_gmm.aic(X)
+    logger.info("GMM selected k=%d (BIC=%.1f).", best_k, best_bic)
+    return best_labels, best_k, best_bic, best_aic
+
+
+def cluster_agglomerative(
+    X: np.ndarray,
+    n_clusters: int = 5,
+    linkage: str = "ward",
+) -> np.ndarray:
+    """Agglomerative (hierarchical) clustering with Ward linkage."""
+    model = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage)
+    return model.fit_predict(X)
+
+
+def cluster_spectral(
+    X: np.ndarray,
+    n_clusters: int = 5,
+    random_state: int = 42,
+) -> np.ndarray:
+    """Spectral clustering using RBF affinity."""
+    model = SpectralClustering(
+        n_clusters=n_clusters,
+        affinity="rbf",
+        random_state=random_state,
+        n_jobs=-1,
+    )
+    return model.fit_predict(X)
+
+
+def within_cluster_rmse(X: np.ndarray, labels: np.ndarray) -> float:
+    """Mean distance from each point to its cluster centroid (clustering RMSE)."""
+    mask = labels != -1
+    X_c, y_c = X[mask], labels[mask]
+    sq_dists = []
+    for cid in np.unique(y_c):
+        pts = X_c[y_c == cid]
+        centroid = pts.mean(axis=0)
+        sq_dists.append(((pts - centroid) ** 2).sum(axis=1))
+    return float(np.sqrt(np.concatenate(sq_dists).mean()))
+
+
 def run_clustering_pipeline(
     feature_matrix: pd.DataFrame,
     algorithm: str = "kmeans",
@@ -239,8 +309,30 @@ def run_clustering_pipeline(
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         logger.info("HDBSCAN found %d clusters (%d noise points).",
                     n_clusters, (labels == -1).sum())
+    elif algorithm == "gmm":
+        k_range_val = (
+            km_cfg.get("n_clusters_range", [3, 10])[0],
+            km_cfg.get("n_clusters_range", [3, 10])[1],
+        )
+        labels, n_clusters, _, _ = cluster_gmm(
+            X_input,
+            k_range=k_range_val,
+            random_state=km_cfg.get("random_state", 42),
+        )
+    elif algorithm == "agglomerative":
+        n_clusters = km_cfg.get("n_clusters_range", [3, 10])[0]
+        labels = cluster_agglomerative(X_input, n_clusters=n_clusters)
+    elif algorithm == "spectral":
+        n_clusters = km_cfg.get("n_clusters_range", [3, 10])[0]
+        labels = cluster_spectral(
+            X_input, n_clusters=n_clusters,
+            random_state=km_cfg.get("random_state", 42),
+        )
     else:
-        raise ValueError(f"Unknown algorithm: {algorithm!r}. Choose 'kmeans' or 'hdbscan'.")
+        raise ValueError(
+            f"Unknown algorithm: {algorithm!r}. "
+            "Choose 'kmeans', 'hdbscan', 'gmm', 'agglomerative', or 'spectral'."
+        )
 
     # Compute evaluation metrics (excluding noise for HDBSCAN)
     mask = labels != -1

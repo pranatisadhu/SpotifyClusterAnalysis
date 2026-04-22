@@ -359,6 +359,85 @@ def plot_temporal_heatmap(
     return fig
 
 
+def plot_comparison_table(
+    comparison_df: pd.DataFrame,
+    title: str = "Clustering Algorithm Comparison",
+) -> go.Figure:
+    """
+    Styled Plotly table comparing clustering algorithms on key metrics.
+    Highlights the best value in each metric column.
+    """
+    higher_better = {"Silhouette ↑", "Calinski-Harabasz ↑"}
+    lower_better = {"Davies-Bouldin ↓", "Within-Cluster RMSE ↓"}
+
+    cols = comparison_df.columns.tolist()
+    header_vals = ["<b>" + c + "</b>" for c in cols]
+
+    cell_vals = []
+    cell_colors = []
+
+    for col in cols:
+        col_data = comparison_df[col]
+        col_str = []
+        col_color = []
+        for val in col_data:
+            if isinstance(val, float):
+                col_str.append(f"{val:.4f}")
+            else:
+                col_str.append(str(val))
+
+        if col in higher_better:
+            try:
+                numeric = pd.to_numeric(col_data, errors="coerce")
+                best_idx = numeric.idxmax()
+                col_color = [
+                    "#d4edda" if i == best_idx else "white"
+                    for i in comparison_df.index
+                ]
+            except Exception:
+                col_color = ["white"] * len(col_data)
+        elif col in lower_better:
+            try:
+                numeric = pd.to_numeric(col_data, errors="coerce")
+                best_idx = numeric.idxmin()
+                col_color = [
+                    "#d4edda" if i == best_idx else "white"
+                    for i in comparison_df.index
+                ]
+            except Exception:
+                col_color = ["white"] * len(col_data)
+        else:
+            col_color = ["white"] * len(col_data)
+
+        cell_vals.append(col_str)
+        cell_colors.append(col_color)
+
+    fig = go.Figure(
+        data=go.Table(
+            header=dict(
+                values=header_vals,
+                fill_color="#2c3e50",
+                font=dict(color="white", size=12),
+                align="center",
+                height=36,
+            ),
+            cells=dict(
+                values=cell_vals,
+                fill_color=cell_colors,
+                align="center",
+                font=dict(size=11),
+                height=30,
+            ),
+        )
+    )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    return fig
+
+
 def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
     """Save a Plotly figure to PDF and optionally other formats."""
     path = Path(path)
