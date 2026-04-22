@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans, AgglomerativeClustering, SpectralClustering
+from sklearn.cluster import KMeans, AgglomerativeClustering, MiniBatchKMeans
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
@@ -223,19 +223,32 @@ def cluster_agglomerative(
     return model.fit_predict(X)
 
 
-def cluster_spectral(
+def cluster_minibatch_kmeans(
     X: np.ndarray,
-    n_clusters: int = 5,
+    k_range: tuple[int, int] = (3, 10),
+    batch_size: int = 1024,
     random_state: int = 42,
-) -> np.ndarray:
-    """Spectral clustering using RBF affinity."""
-    model = SpectralClustering(
-        n_clusters=n_clusters,
-        affinity="rbf",
-        random_state=random_state,
-        n_jobs=-1,
-    )
-    return model.fit_predict(X)
+) -> tuple[np.ndarray, int]:
+    """MiniBatchKMeans sweep over k_range; select k via silhouette score."""
+    best_labels = None
+    best_k = k_range[0]
+    best_sil = -1.0
+
+    for k in range(k_range[0], k_range[1] + 1):
+        model = MiniBatchKMeans(
+            n_clusters=k, batch_size=batch_size,
+            random_state=random_state, n_init=10,
+        )
+        labels = model.fit_predict(X)
+        sil = silhouette_score(X, labels)
+        logger.info("  MiniBatchKMeans k=%d → silhouette=%.4f", k, sil)
+        if sil > best_sil:
+            best_sil = sil
+            best_k = k
+            best_labels = labels
+
+    logger.info("MiniBatchKMeans selected k=%d (silhouette=%.4f).", best_k, best_sil)
+    return best_labels, best_k
 
 
 def within_cluster_rmse(X: np.ndarray, labels: np.ndarray) -> float:
