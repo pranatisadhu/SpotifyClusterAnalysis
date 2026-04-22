@@ -293,9 +293,10 @@ def plot_genre_distribution(
     pivot_wide = pivot.pivot(index="cluster", columns="genres", values="count").fillna(0)
     pivot_wide = pivot_wide.div(pivot_wide.sum(axis=1), axis=0)  # normalise rows
     pivot_wide = pivot_wide[pivot_wide.index != -1]
-    pivot_wide.index = [
-        cluster_names.get(int(c), f"Cluster {c}") for c in pivot_wide.index
-    ]
+    pivot_wide.index = pd.Index(
+        [cluster_names.get(int(c), f"Cluster {c}") for c in pivot_wide.index],
+        name="cluster",
+    )
 
     fig = px.bar(
         pivot_wide.reset_index().melt(id_vars="cluster", var_name="genre", value_name="proportion"),
