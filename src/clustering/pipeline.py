@@ -133,9 +133,12 @@ def cluster_kmeans(
     k_range: tuple[int, int] = (3, 10),
     n_init: int = 20,
     random_state: int = 42,
+    fixed_k: int | None = None,
 ) -> tuple[np.ndarray, int, dict[int, float], dict[int, float]]:
     """
-    KMeans sweep over k_range; select k via silhouette score.
+    KMeans clustering.  When `fixed_k` is provided the sweep is skipped and
+    that k is used directly; otherwise the k with the highest silhouette score
+    across k_range is selected.
 
     Returns
     -------
@@ -143,6 +146,16 @@ def cluster_kmeans(
     """
     silhouette_scores: dict[int, float] = {}
     inertias: dict[int, float] = {}
+
+    if fixed_k is not None:
+        km = KMeans(n_clusters=fixed_k, n_init=n_init, random_state=random_state)
+        labels = km.fit_predict(X)
+        sil = silhouette_score(X, labels)
+        silhouette_scores[fixed_k] = sil
+        inertias[fixed_k] = km.inertia_
+        logger.info("KMeans fixed k=%d → silhouette=%.4f, inertia=%.1f", fixed_k, sil, km.inertia_)
+        return labels, fixed_k, silhouette_scores, inertias
+
     best_labels = None
     best_k = k_range[0]
     best_sil = -1.0
@@ -223,11 +236,13 @@ def run_clustering_pipeline(
             km_cfg.get("n_clusters_range", [3, 10])[0],
             km_cfg.get("n_clusters_range", [3, 10])[1],
         )
+        fixed_k = km_cfg.get("n_clusters", None)
         labels, n_clusters, sil_scores, inertias = cluster_kmeans(
             X_input,
             k_range=k_range_val,
             n_init=km_cfg.get("n_init", 20),
             random_state=km_cfg.get("random_state", 42),
+            fixed_k=fixed_k,
         )
     elif algorithm == "hdbscan":
         labels = cluster_hdbscan(

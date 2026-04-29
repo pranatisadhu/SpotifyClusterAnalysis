@@ -38,7 +38,8 @@ clustering:
     - kmeans
     - hdbscan
   kmeans:
-    n_clusters_range: [3, 10]
+    n_clusters: 5           # Fixed at 5 — see notebook 03 for rationale
+    n_clusters_range: [3, 10]   # Used only for elbow sweep visualisation
     n_init: 20
     random_state: 42
   hdbscan:

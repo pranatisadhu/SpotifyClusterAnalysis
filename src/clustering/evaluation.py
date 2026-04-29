@@ -58,21 +58,23 @@ def label_clusters(
     Generate a human-readable label for each cluster based on its top
     distinguishing features.
 
-    Uses a heuristic: compare each cluster's mean to the global mean for
-    key features and pick the most extreme deviations.
+    Ranks each cluster's features by their absolute z-deviation from the
+    global mean and always returns a 2-part name from the top two most
+    discriminating features, regardless of deviation magnitude.  This
+    guarantees every cluster gets a meaningful, stable archetype name.
 
     Returns
     -------
     dict mapping cluster_id → descriptive label string
     """
     key_features = {
-        "artist_entropy": ("Diverse", "Focused"),
-        "genre_entropy": ("Genre-Diverse", "Genre-Focused"),
+        "artist_entropy": ("Diverse-Taste", "Focused-Taste"),
+        "genre_entropy": ("Genre-Explorer", "Genre-Specialist"),
         "track_replay_rate": ("High-Replay", "Low-Replay"),
-        "novelty_ratio": ("Explorer", "Loyalist"),
+        "novelty_ratio": ("Discovery-Seeker", "Comfort-Listener"),
         "discovery_velocity_30d": ("Fast-Discovery", "Slow-Discovery"),
         "temporal_hour_entropy": ("All-Hours", "Routine-Hours"),
-        "weekend_ratio": ("Weekend", "Weekday"),
+        "weekend_ratio": ("Weekend-Heavy", "Weekday-Heavy"),
         "avg_tracks_per_session": ("Long-Sessions", "Short-Sessions"),
     }
 
@@ -88,16 +90,22 @@ def label_clusters(
             labels_map[cid] = "Noise"
             continue
         cluster_means = df[df["cluster"] == cid][numeric_cols].mean()
-        tags = []
+
+        # Score every key feature by absolute z-deviation; always take top 2
+        scored: list[tuple[float, float, str, str]] = []
         for feat, (high_label, low_label) in key_features.items():
-            if feat not in cluster_means:
+            if feat not in cluster_means or feat not in global_means.index:
                 continue
-            z = (cluster_means[feat] - global_means[feat]) / (global_means[feat] + 1e-9)
-            if z > 0.3:
-                tags.append(high_label)
-            elif z < -0.3:
-                tags.append(low_label)
-        labels_map[cid] = " / ".join(tags[:3]) if tags else f"Cluster {cid}"
+            denom = abs(global_means[feat]) + 1e-9
+            z = (cluster_means[feat] - global_means[feat]) / denom
+            scored.append((abs(z), z, high_label, low_label))
+
+        scored.sort(reverse=True)
+        tags = [
+            high if z >= 0 else low
+            for _, z, high, low in scored[:2]
+        ]
+        labels_map[cid] = " / ".join(tags) if tags else f"Cluster {cid}"
 
     return labels_map
 
