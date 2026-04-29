@@ -293,9 +293,37 @@ def plot_genre_distribution(
         on="artist_name_normalized",
         how="left",
     )
-    merged["genres"] = merged["genres"].apply(lambda x: x if isinstance(x, list) else [])
-    exploded = merged.explode("genres").dropna(subset=["genres"])
-    exploded = exploded[exploded["genres"] != ""]
+
+    def _parse_genres(x) -> list:
+        """Accept list, numpy array, JSON string, or comma-separated string."""
+        if x is None:
+            return []
+        if isinstance(x, (list, np.ndarray)):
+            return [g for g in x if g and str(g).strip()]
+        if isinstance(x, str) and x.strip():
+            import json
+            try:
+                parsed = json.loads(x)
+                if isinstance(parsed, list):
+                    return [g for g in parsed if g]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            return [g.strip() for g in x.split(",") if g.strip()]
+        return []
+
+    merged["genres"] = merged["genres"].apply(_parse_genres)
+    exploded = merged.explode("genres")
+    exploded = exploded[exploded["genres"].notna() & (exploded["genres"] != "")]
+
+    if exploded.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=title,
+            template="plotly_white",
+            annotations=[dict(text="No genre data available for these artists",
+                              showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")],
+        )
+        return fig
 
     top_genres = exploded["genres"].value_counts().head(top_n_genres).index.tolist()
     filtered = exploded[exploded["genres"].isin(top_genres)]
