@@ -305,6 +305,7 @@ def plot_genre_distribution(
     pivot_wide.index = [
         cluster_names.get(int(c), f"Cluster {c}") for c in pivot_wide.index
     ]
+    pivot_wide.index.name = "cluster"
 
     fig = px.bar(
         pivot_wide.reset_index().melt(id_vars="cluster", var_name="genre", value_name="proportion"),
