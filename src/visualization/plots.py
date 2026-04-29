@@ -87,29 +87,44 @@ def plot_cluster_radar(
 ) -> go.Figure:
     """
     Radar chart comparing cluster profiles across selected features.
+    Each feature is min-max normalised across clusters so all axes share
+    the same 0–1 scale and no single high-magnitude feature collapses
+    the others to the centre.
 
     Parameters
     ----------
     cluster_summary : output of evaluation.summarise_clusters (mean values)
     features : list of feature names to include on the radar
     """
-    # Extract mean values for selected features
     cluster_names = cluster_names or {}
+
+    # Collect raw means per (cluster, feature)
+    valid_cids = [cid for cid in cluster_summary.index if cid != -1]
+    raw: dict[int, list[float]] = {}
+    for cid in valid_cids:
+        raw[cid] = [
+            float(cluster_summary.loc[cid, (feat, "mean")])
+            if (feat, "mean") in cluster_summary.columns else 0.0
+            for feat in features
+        ]
+
+    # Per-feature min-max normalisation across clusters so every axis is 0–1
+    feat_min = [min(raw[c][i] for c in valid_cids) for i in range(len(features))]
+    feat_max = [max(raw[c][i] for c in valid_cids) for i in range(len(features))]
+
+    def normalise(vals: list[float]) -> list[float]:
+        return [
+            (v - feat_min[i]) / (feat_max[i] - feat_min[i] + 1e-9)
+            for i, v in enumerate(vals)
+        ]
+
     fig = go.Figure()
-
-    for cid in cluster_summary.index:
-        if cid == -1:
-            continue
-        means = []
-        for feat in features:
-            val = cluster_summary.loc[cid, (feat, "mean")] if (feat, "mean") in cluster_summary.columns else 0
-            means.append(val)
-
-        # Normalise to 0–1 range across clusters for comparability
+    for cid in valid_cids:
+        norm_vals = normalise(raw[cid])
         label = cluster_names.get(cid, f"Cluster {cid}")
         fig.add_trace(
             go.Scatterpolar(
-                r=means + [means[0]],  # close the polygon
+                r=norm_vals + [norm_vals[0]],   # close the polygon
                 theta=features + [features[0]],
                 name=label,
                 fill="toself",
@@ -118,7 +133,7 @@ def plot_cluster_radar(
         )
 
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True)),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
         title=title,
         template="plotly_white",
         showlegend=True,
@@ -261,10 +276,10 @@ def plot_genre_distribution(
     """
     cluster_names = cluster_names or {}
 
-    # Build user → cluster mapping
-    user_cluster = dict(zip(userids, labels))
+    # Coerce both sides to str to avoid int/str key mismatches
+    user_cluster = {str(uid): int(cid) for uid, cid in zip(userids, labels)}
     sc = scrobbles.copy()
-    sc["cluster"] = sc["userid"].map(user_cluster)
+    sc["cluster"] = sc["userid"].astype(str).map(user_cluster)
     sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
 
     merged = sc.merge(
@@ -314,16 +329,21 @@ def plot_temporal_heatmap(
 ) -> go.Figure:
     """
     Heatmap of mean listening activity: hours (x) × days-of-week (y) for one cluster.
+    Values are average plays per user per hour-day cell so patterns are
+    comparable across clusters of different sizes.
     """
-    user_cluster = dict(zip(userids, labels))
+    # Coerce both sides to str to avoid int/str key mismatches
+    user_cluster = {str(uid): int(cid) for uid, cid in zip(userids, labels)}
+    n_cluster_users = sum(1 for v in user_cluster.values() if v == cluster_id)
+
     sc = scrobbles.copy()
-    sc["cluster"] = sc["userid"].map(user_cluster)
+    sc["cluster"] = sc["userid"].astype(str).map(user_cluster)
     cluster_sc = sc[sc["cluster"] == cluster_id].copy()
 
-    cluster_sc["hour"] = cluster_sc["timestamp"].dt.hour
-    cluster_sc["dow"] = cluster_sc["timestamp"].dt.dayofweek
+    cluster_sc["hour"] = pd.to_datetime(cluster_sc["timestamp"]).dt.hour
+    cluster_sc["dow"] = pd.to_datetime(cluster_sc["timestamp"]).dt.dayofweek
 
-    heatmap_data = (
+    raw_counts = (
         cluster_sc.groupby(["dow", "hour"])
         .size()
         .reset_index(name="plays")
@@ -331,6 +351,9 @@ def plot_temporal_heatmap(
         .reindex(index=range(7), columns=range(24))
         .fillna(0)
     )
+
+    # Normalise: average plays per user so all clusters are on the same scale
+    heatmap_data = raw_counts / max(n_cluster_users, 1)
 
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     name = cluster_name or f"Cluster {cluster_id}"
@@ -340,7 +363,8 @@ def plot_temporal_heatmap(
             z=heatmap_data.values,
             x=[f"{h:02d}:00" for h in range(24)],
             y=dow_labels,
-            colorscale="Viridis",
+            colorscale="Blues",
+            colorbar=dict(title="Avg plays<br>per user"),
         )
     )
     fig.update_layout(
