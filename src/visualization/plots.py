@@ -37,6 +37,13 @@ def _cluster_color_map(labels: np.ndarray) -> dict[int, str]:
     return {c: _PALETTE[i % len(_PALETTE)] for i, c in enumerate(unique)}
 
 
+def _uid_str(uid) -> str:
+    """Normalise a user ID to a plain integer string regardless of dtype.
+    Handles int64 (1000002), float64 (1000002.0), and str ('1000002') equally."""
+    s = str(uid)
+    return s[:-2] if s.endswith(".0") else s
+
+
 def plot_umap_clusters(
     umap_coords: np.ndarray,
     labels: np.ndarray,
@@ -276,10 +283,9 @@ def plot_genre_distribution(
     """
     cluster_names = cluster_names or {}
 
-    # Coerce both sides to str to avoid int/str key mismatches
-    user_cluster = {str(uid): int(cid) for uid, cid in zip(userids, labels)}
+    user_cluster = {_uid_str(uid): int(cid) for uid, cid in zip(userids, labels)}
     sc = scrobbles.copy()
-    sc["cluster"] = sc["userid"].astype(str).map(user_cluster)
+    sc["cluster"] = sc["userid"].apply(_uid_str).map(user_cluster)
     sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
 
     merged = sc.merge(
@@ -333,12 +339,11 @@ def plot_temporal_heatmap(
     Values are average plays per user per hour-day cell so patterns are
     comparable across clusters of different sizes.
     """
-    # Coerce both sides to str to avoid int/str key mismatches
-    user_cluster = {str(uid): int(cid) for uid, cid in zip(userids, labels)}
+    user_cluster = {_uid_str(uid): int(cid) for uid, cid in zip(userids, labels)}
     n_cluster_users = sum(1 for v in user_cluster.values() if v == cluster_id)
 
     sc = scrobbles.copy()
-    sc["cluster"] = sc["userid"].astype(str).map(user_cluster)
+    sc["cluster"] = sc["userid"].apply(_uid_str).map(user_cluster)
     cluster_sc = sc[sc["cluster"] == cluster_id].copy()
 
     cluster_sc["hour"] = pd.to_datetime(cluster_sc["timestamp"]).dt.hour
@@ -365,6 +370,7 @@ def plot_temporal_heatmap(
             x=[f"{h:02d}:00" for h in range(24)],
             y=dow_labels,
             colorscale="Blues",
+            zmin=0,
             colorbar=dict(title="Avg plays<br>per user"),
         )
     )
