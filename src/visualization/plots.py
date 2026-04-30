@@ -411,10 +411,17 @@ def plot_temporal_heatmap(
     return fig
 
 
-def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
-    """Save a Plotly figure to HTML and optionally to static formats."""
+def save_figure(
+    fig: go.Figure,
+    path: str | Path,
+    formats: list[str] | None = None,
+) -> None:
+    """Save a Plotly figure to HTML + static formats (default: EPS).
+
+    Requires kaleido for static export: pip install kaleido
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(str(path.with_suffix(".html")))
-    for fmt in (formats or []):
+    for fmt in (formats if formats is not None else ["eps"]):
         fig.write_image(str(path.with_suffix(f".{fmt}")))
