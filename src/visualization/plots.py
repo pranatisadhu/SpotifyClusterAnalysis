@@ -18,6 +18,7 @@ Functions:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+logger = logging.getLogger(__name__)
 
 _PALETTE = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
@@ -288,6 +291,14 @@ def plot_genre_distribution(
     sc["cluster"] = sc["userid"].apply(_uid_str).map(user_cluster)
     sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
 
+    # Mapping coverage check — printed so mismatches are immediately visible
+    mapped = sc["cluster"].notna().sum()
+    logger.info(
+        "Genre chart — %d / %d scrobbles mapped to a cluster; per-cluster: %s",
+        mapped, len(sc),
+        sc["cluster"].value_counts(dropna=False).sort_index().to_dict(),
+    )
+
     merged = sc.merge(
         artist_genres[["artist_name_normalized", "genres"]],
         on="artist_name_normalized",
@@ -361,11 +372,18 @@ def plot_temporal_heatmap(
     userids: list[str],
     cluster_id: int,
     cluster_name: str | None = None,
+    zmax: float | None = None,
 ) -> go.Figure:
     """
     Heatmap of mean listening activity: hours (x) × days-of-week (y) for one cluster.
     Values are average plays per user per hour-day cell so patterns are
     comparable across clusters of different sizes.
+
+    Parameters
+    ----------
+    zmax : shared colour-scale ceiling; pass the same value to all clusters so
+           their heatmaps are directly comparable.  If None, defaults to the
+           maximum value in this cluster's data (minimum floor 0.01).
     """
     user_cluster = {_uid_str(uid): int(cid) for uid, cid in zip(userids, labels)}
     n_cluster_users = sum(1 for v in user_cluster.values() if v == cluster_id)
@@ -373,6 +391,26 @@ def plot_temporal_heatmap(
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].apply(_uid_str).map(user_cluster)
     cluster_sc = sc[sc["cluster"] == cluster_id].copy()
+
+    name = cluster_name or f"Cluster {cluster_id}"
+
+    # Guard: no scrobbles found for this cluster's users
+    if cluster_sc.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Listening Activity Pattern: {name}",
+            template="plotly_white",
+            annotations=[dict(
+                text=(
+                    f"No scrobbles found for {name}.<br>"
+                    "Restart the kernel and re-run all cells, then check<br>"
+                    "the genre diagnostic cell (Section 5) for userid mapping info."
+                ),
+                showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper",
+                font=dict(size=13),
+            )],
+        )
+        return fig
 
     cluster_sc["hour"] = pd.to_datetime(cluster_sc["timestamp"]).dt.hour
     cluster_sc["dow"] = pd.to_datetime(cluster_sc["timestamp"]).dt.dayofweek
@@ -389,8 +427,10 @@ def plot_temporal_heatmap(
     # Normalise: average plays per user so all clusters are on the same scale
     heatmap_data = raw_counts / max(n_cluster_users, 1)
 
+    # Colour-scale ceiling: use provided zmax or derive from this cluster's data
+    _zmax = zmax if zmax is not None else max(float(heatmap_data.values.max()), 0.01)
+
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    name = cluster_name or f"Cluster {cluster_id}"
 
     fig = go.Figure(
         data=go.Heatmap(
@@ -399,6 +439,7 @@ def plot_temporal_heatmap(
             y=dow_labels,
             colorscale="Blues",
             zmin=0,
+            zmax=_zmax,
             colorbar=dict(title="Avg plays<br>per user"),
         )
     )
