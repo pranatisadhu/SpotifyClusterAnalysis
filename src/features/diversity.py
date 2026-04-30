@@ -10,7 +10,6 @@ Features produced:
   - genre_entropy           : Shannon entropy of genre play distribution
   - artist_concentration_20 : % of plays attributed to the top 20 artists
   - genre_concentration_5   : % of plays attributed to top 5 genres
-  - avg_genre_tags_per_play : average number of genre tags per scrobble
 """
 
 from __future__ import annotations
@@ -107,14 +106,6 @@ def compute_genre_diversity(
         lambda x: x if isinstance(x, list) else []
     )
 
-    # Average genre tags per play
-    avg_genre_tags = (
-        merged.groupby("userid")["genres"]
-        .apply(lambda s: s.apply(len).mean())
-        .rename("avg_genre_tags_per_play")
-        .fillna(0)
-    )
-
     # Explode to (userid, genre) level
     merged_exploded = merged.explode("genres").dropna(subset=["genres"])
     merged_exploded = merged_exploded[merged_exploded["genres"] != ""]
@@ -125,7 +116,6 @@ def compute_genre_diversity(
                 "unique_genres": 0,
                 "genre_entropy": 0.0,
                 f"genre_concentration_{top_n}": 0.0,
-                "avg_genre_tags_per_play": avg_genre_tags,
             }
         )
 
@@ -155,6 +145,6 @@ def compute_genre_diversity(
     )
 
     result = pd.concat(
-        [unique_genres, genre_entropy, genre_concentration, avg_genre_tags], axis=1
+        [unique_genres, genre_entropy, genre_concentration], axis=1
     ).fillna(0)
     return result
