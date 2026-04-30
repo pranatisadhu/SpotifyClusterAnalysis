@@ -103,7 +103,7 @@ def compute_genre_diversity(
         how="left",
     )
     merged["genres"] = merged["genres"].apply(
-        lambda x: x if isinstance(x, list) else []
+        lambda x: list(x) if isinstance(x, (list, np.ndarray)) else []
     )
 
     # Explode to (userid, genre) level
@@ -116,7 +116,8 @@ def compute_genre_diversity(
                 "unique_genres": 0,
                 "genre_entropy": 0.0,
                 f"genre_concentration_{top_n}": 0.0,
-            }
+            },
+            index=scrobbles["userid"].unique(),
         )
 
     genre_counts = (
