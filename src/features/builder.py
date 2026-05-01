@@ -66,7 +66,7 @@ def build_feature_matrix(
 
     # Combine all feature blocks.
     # artist_div sets the user universe (all scrobble users); every subsequent
-    # block is left-joined so we never introduce phantom users via outer joins.
+    # block is left-joined so outer joins never introduce phantom NaN rows.
     # audio_profile covers only users whose tracks matched Spotify; missing
     # values are handled by median imputation in the clustering pipeline.
     feature_matrix = (

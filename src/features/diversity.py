@@ -71,7 +71,7 @@ def compute_artist_diversity(scrobbles: pd.DataFrame, top_n: int = 20) -> pd.Dat
     result = pd.concat(
         [unique_artists, artist_entropy, artist_concentration], axis=1
     )
-    # Reindex to guarantee all scrobble users are present; fill gaps with 0
+    # Reindex to guarantee every scrobble user is present; fill gaps with 0
     result = result.reindex(pd.Index(all_users, name="userid")).fillna(0)
     return result
 
@@ -86,7 +86,7 @@ def compute_genre_diversity(
 
     All users present in scrobbles appear in the result; users whose artists
     have no Spotify genre data receive zeros (not NaN) so they are not dropped
-    during outer joins in the feature matrix.
+    during downstream joins in the feature matrix.
 
     Parameters
     ----------
@@ -98,7 +98,7 @@ def compute_genre_diversity(
     -------
     pd.DataFrame indexed by userid with genre diversity columns
     """
-    # Capture full user list before any filtering so we can reindex at the end
+    # Capture full user list before any filtering
     all_users = scrobbles["userid"].unique()
 
     sc = scrobbles.copy()
@@ -109,8 +109,9 @@ def compute_genre_diversity(
         on="artist_name_normalized",
         how="left",
     )
+    # Normalise genres column — handles list, np.ndarray, or missing
     merged["genres"] = merged["genres"].apply(
-        lambda x: x if isinstance(x, list) else []
+        lambda x: list(x) if isinstance(x, (list, np.ndarray)) else []
     )
 
     # Average genre tags per play — left-merged so all users are covered
@@ -164,7 +165,7 @@ def compute_genre_diversity(
     result = pd.concat(
         [unique_genres, genre_entropy, genre_concentration, avg_genre_tags], axis=1
     )
-    # Reindex to ALL scrobble users — users with no genre matches receive zeros
+    # Reindex to ALL scrobble users — users with no genre matches get zeros
     result = result.reindex(pd.Index(all_users, name="userid")).fillna(0)
     result["unique_genres"] = result["unique_genres"].astype(int)
     return result
