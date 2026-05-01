@@ -59,3 +59,5 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+outputs/figures/*.eps
+outputs/figures/*.pdf
