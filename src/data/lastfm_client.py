@@ -116,10 +116,25 @@ def fetch_user_scrobbles(
             break  # success — exit retry loop
 
         except pylast.WSError as exc:
-            if "User not found" in str(exc) or "Invalid user" in str(exc):
+            msg = str(exc)
+            if "User not found" in msg or "Invalid user" in msg or "6" in msg:
                 logger.warning("User %s not found on Last.fm — skipping.", username)
                 return pd.DataFrame(columns=_SCROBBLE_COLS)
             raise
+        except pylast.PyLastError as exc:
+            # stream=True mode swallows WSError after 3 internal retries and
+            # re-raises as PyLastError; treat any wrapped 404/user-not-found
+            # the same way — skip the user rather than crashing the whole run.
+            msg = str(exc).lower()
+            if any(kw in msg for kw in ("not found", "invalid user", "no such user", "404")):
+                logger.warning("User %s not found on Last.fm (stream error) — skipping.", username)
+                return pd.DataFrame(columns=_SCROBBLE_COLS)
+            wait = 2 ** attempt
+            logger.warning(
+                "PyLastError fetching %s (attempt %d/5): %s — retrying in %ds.",
+                username, attempt + 1, exc, wait,
+            )
+            time.sleep(wait)
         except (pylast.NetworkError, pylast.MalformedResponseError) as exc:
             wait = 2 ** attempt
             logger.warning(
