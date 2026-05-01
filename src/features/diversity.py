@@ -10,6 +10,7 @@ Features produced:
   - genre_entropy           : Shannon entropy of genre play distribution
   - artist_concentration_20 : % of plays attributed to the top 20 artists
   - genre_concentration_5   : % of plays attributed to top 5 genres
+  - avg_genre_tags_per_play : average number of genre tags per scrobble
 """
 
 from __future__ import annotations
@@ -38,25 +39,24 @@ def compute_artist_diversity(scrobbles: pd.DataFrame, top_n: int = 20) -> pd.Dat
     -------
     pd.DataFrame indexed by userid with artist diversity columns
     """
+    all_users = scrobbles["userid"].unique()
+
     play_counts = (
         scrobbles.groupby(["userid", "artist_name"])
         .size()
         .reset_index(name="plays")
     )
 
-    # Unique artist count
     unique_artists = (
         play_counts.groupby("userid")["artist_name"].nunique().rename("unique_artists")
     )
 
-    # Shannon entropy of artist play distribution
     artist_entropy = (
         play_counts.groupby("userid")["plays"]
         .apply(_shannon_entropy)
         .rename("artist_entropy")
     )
 
-    # Concentration: % plays from top N artists
     def _concentration(group: pd.DataFrame) -> float:
         total = group["plays"].sum()
         top_plays = group.nlargest(top_n, "plays")["plays"].sum()
@@ -70,7 +70,9 @@ def compute_artist_diversity(scrobbles: pd.DataFrame, top_n: int = 20) -> pd.Dat
 
     result = pd.concat(
         [unique_artists, artist_entropy, artist_concentration], axis=1
-    ).fillna(0)
+    )
+    # Reindex to guarantee every scrobble user is present; fill gaps with 0
+    result = result.reindex(pd.Index(all_users, name="userid")).fillna(0)
     return result
 
 
@@ -82,6 +84,10 @@ def compute_genre_diversity(
     """
     Compute genre-level diversity features per user by joining artist genre tags.
 
+    All users present in scrobbles appear in the result; users whose artists
+    have no Spotify genre data receive zeros (not NaN) so they are not dropped
+    during downstream joins in the feature matrix.
+
     Parameters
     ----------
     scrobbles : DataFrame with columns [userid, artist_name, ...]
@@ -92,33 +98,44 @@ def compute_genre_diversity(
     -------
     pd.DataFrame indexed by userid with genre diversity columns
     """
-    # Normalise artist name for join
-    scrobbles = scrobbles.copy()
-    scrobbles["artist_name_normalized"] = scrobbles["artist_name"].str.strip().str.lower()
+    # Capture full user list before any filtering
+    all_users = scrobbles["userid"].unique()
 
-    # Explode genres: one row per (userid, play, genre)
-    merged = scrobbles.merge(
+    sc = scrobbles.copy()
+    sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
+
+    merged = sc.merge(
         artist_genres[["artist_name_normalized", "genres"]],
         on="artist_name_normalized",
         how="left",
     )
+    # Normalise genres column — handles list, np.ndarray, or missing
     merged["genres"] = merged["genres"].apply(
         lambda x: list(x) if isinstance(x, (list, np.ndarray)) else []
     )
 
-    # Explode to (userid, genre) level
+    # Average genre tags per play — left-merged so all users are covered
+    avg_genre_tags = (
+        merged.groupby("userid")["genres"]
+        .apply(lambda s: s.apply(len).mean())
+        .rename("avg_genre_tags_per_play")
+        .fillna(0)
+    )
+
+    # Explode to (userid, genre) level; rows with no genre are dropped here
     merged_exploded = merged.explode("genres").dropna(subset=["genres"])
-    merged_exploded = merged_exploded[merged_exploded["genres"] != ""]
+    merged_exploded = merged_exploded[merged_exploded["genres"].astype(str).str.strip() != ""]
 
     if merged_exploded.empty:
-        return pd.DataFrame(
-            {
-                "unique_genres": 0,
-                "genre_entropy": 0.0,
-                f"genre_concentration_{top_n}": 0.0,
-            },
-            index=scrobbles["userid"].unique(),
+        # No genre data at all — return zero-filled frame for all users
+        result = pd.DataFrame(
+            0.0,
+            index=pd.Index(all_users, name="userid"),
+            columns=["unique_genres", "genre_entropy", f"genre_concentration_{top_n}",
+                     "avg_genre_tags_per_play"],
         )
+        result["unique_genres"] = result["unique_genres"].astype(int)
+        return result
 
     genre_counts = (
         merged_exploded.groupby(["userid", "genres"])
@@ -146,6 +163,9 @@ def compute_genre_diversity(
     )
 
     result = pd.concat(
-        [unique_genres, genre_entropy, genre_concentration], axis=1
-    ).fillna(0)
+        [unique_genres, genre_entropy, genre_concentration, avg_genre_tags], axis=1
+    )
+    # Reindex to ALL scrobble users — users with no genre matches get zeros
+    result = result.reindex(pd.Index(all_users, name="userid")).fillna(0)
+    result["unique_genres"] = result["unique_genres"].astype(int)
     return result

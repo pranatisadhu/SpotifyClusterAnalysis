@@ -64,13 +64,17 @@ def build_feature_matrix(
     logger.info("Computing audio feature profile...")
     audio_profile = compute_audio_feature_profile(scrobbles, audio_features)
 
-    # Combine all feature blocks
+    # Combine all feature blocks.
+    # artist_div sets the user universe (all scrobble users); every subsequent
+    # block is left-joined so outer joins never introduce phantom NaN rows.
+    # audio_profile covers only users whose tracks matched Spotify; missing
+    # values are handled by median imputation in the clustering pipeline.
     feature_matrix = (
         artist_div
-        .join(genre_div, how="outer")
-        .join(temporal, how="outer")
-        .join(engagement, how="outer")
-        .join(audio_profile, how="outer")
+        .join(genre_div, how="left")
+        .join(temporal, how="left")
+        .join(engagement, how="left")
+        .join(audio_profile, how="left")
     )
 
     # Optionally join demographic features (used as descriptive, not clustering inputs)
