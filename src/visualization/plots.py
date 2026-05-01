@@ -1,23 +1,27 @@
 """
 plots.py
 --------
-Interactive Plotly visualisations for the cluster analysis.
+Visualisations for the cluster analysis.
 
-All functions return a plotly Figure object — call .show() or .write_html()
-as needed.
+Plotly figures are saved as both interactive HTML and high-quality EPS
+(via kaleido).  Matplotlib helpers return Axes so callers can save with
+plt.savefig(..., format='eps').
 
 Functions:
-  - plot_umap_clusters      : 2D UMAP scatter coloured by cluster
-  - plot_cluster_radar      : radar/spider chart of cluster feature profiles
-  - plot_feature_importance : horizontal bar chart of RF feature importance
-  - plot_elbow              : KMeans elbow + silhouette dual-axis chart
-  - plot_cluster_heatmap    : heatmap of normalised feature means per cluster
-  - plot_genre_distribution : stacked bar of top genres per cluster
-  - plot_temporal_heatmap   : listening activity by hour × day-of-week per cluster
+  - plot_umap_clusters         : 2D UMAP scatter coloured by cluster
+  - plot_cluster_radar         : radar/spider chart of cluster feature profiles
+  - plot_feature_importance    : horizontal bar chart of RF feature importance
+  - plot_elbow                 : KMeans elbow + silhouette dual-axis chart
+  - plot_cluster_heatmap       : heatmap of normalised feature means per cluster
+  - plot_genre_distribution    : stacked bar of top genres per cluster
+  - plot_temporal_heatmap      : listening activity heatmap (hour × dow) per cluster
+  - plot_demographic_breakdown : cluster × demographic bar/box charts (matplotlib)
+  - save_figure                : save Plotly figure to HTML + EPS
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +29,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+logger = logging.getLogger(__name__)
 
 _PALETTE = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
@@ -37,23 +43,18 @@ def _cluster_color_map(labels: np.ndarray) -> dict[int, str]:
     return {c: _PALETTE[i % len(_PALETTE)] for i, c in enumerate(unique)}
 
 
+# ---------------------------------------------------------------------------
+# Plotly figures
+# ---------------------------------------------------------------------------
+
 def plot_umap_clusters(
     umap_coords: np.ndarray,
     labels: np.ndarray,
     cluster_names: dict[int, str] | None = None,
     userids: list[str] | None = None,
-    title: str = "UMAP Projection of User Listening Profiles",
+    title: str = "UMAP Projection Of User Listening Profiles",
 ) -> go.Figure:
-    """
-    2D UMAP scatter plot coloured by cluster label.
-
-    Parameters
-    ----------
-    umap_coords : (n_users, 2) array of UMAP coordinates
-    labels : cluster label per user
-    cluster_names : optional mapping {cluster_id: human_readable_name}
-    userids : optional list of user IDs for hover tooltips
-    """
+    """2D UMAP scatter plot coloured by cluster label."""
     df = pd.DataFrame(
         {"umap_x": umap_coords[:, 0], "umap_y": umap_coords[:, 1], "cluster": labels}
     )
@@ -76,6 +77,10 @@ def plot_umap_clusters(
         template="plotly_white",
     )
     fig.update_traces(marker=dict(size=8, opacity=0.8))
+    fig.update_layout(
+        title_font_size=16,
+        legend_title_text="Segment",
+    )
     return fig
 
 
@@ -85,15 +90,7 @@ def plot_cluster_radar(
     cluster_names: dict[int, str] | None = None,
     title: str = "Cluster Feature Profiles (Normalised)",
 ) -> go.Figure:
-    """
-    Radar chart comparing cluster profiles across selected features.
-
-    Parameters
-    ----------
-    cluster_summary : output of evaluation.summarise_clusters (mean values)
-    features : list of feature names to include on the radar
-    """
-    # Extract mean values for selected features
+    """Radar chart comparing cluster profiles across selected features."""
     cluster_names = cluster_names or {}
     fig = go.Figure()
 
@@ -102,14 +99,17 @@ def plot_cluster_radar(
             continue
         means = []
         for feat in features:
-            val = cluster_summary.loc[cid, (feat, "mean")] if (feat, "mean") in cluster_summary.columns else 0
+            val = (
+                cluster_summary.loc[cid, (feat, "mean")]
+                if (feat, "mean") in cluster_summary.columns
+                else 0
+            )
             means.append(val)
 
-        # Normalise to 0–1 range across clusters for comparability
         label = cluster_names.get(cid, f"Cluster {cid}")
         fig.add_trace(
             go.Scatterpolar(
-                r=means + [means[0]],  # close the polygon
+                r=means + [means[0]],
                 theta=features + [features[0]],
                 name=label,
                 fill="toself",
@@ -120,6 +120,7 @@ def plot_cluster_radar(
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True)),
         title=title,
+        title_font_size=16,
         template="plotly_white",
         showlegend=True,
     )
@@ -131,9 +132,7 @@ def plot_feature_importance(
     top_n: int = 20,
     title: str = "Top Features Distinguishing Listener Segments",
 ) -> go.Figure:
-    """
-    Horizontal bar chart of Random Forest feature importances.
-    """
+    """Horizontal bar chart of Random Forest feature importances."""
     df = importance_df.head(top_n).copy()
     fig = px.bar(
         df,
@@ -146,17 +145,19 @@ def plot_feature_importance(
         color_continuous_scale="Blues",
         template="plotly_white",
     )
-    fig.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
+    fig.update_layout(
+        yaxis=dict(autorange="reversed"),
+        coloraxis_showscale=False,
+        title_font_size=16,
+    )
     return fig
 
 
 def plot_elbow(
     elbow_df: pd.DataFrame,
-    title: str = "KMeans Model Selection: Elbow + Silhouette",
+    title: str = "KMeans Model Selection: Elbow And Silhouette",
 ) -> go.Figure:
-    """
-    Dual-axis chart: inertia (left axis) and silhouette score (right axis) vs k.
-    """
+    """Dual-axis chart: inertia (left) and silhouette score (right) vs k."""
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     fig.add_trace(
@@ -184,7 +185,8 @@ def plot_elbow(
 
     fig.update_layout(
         title=title,
-        xaxis_title="Number of Clusters (k)",
+        title_font_size=16,
+        xaxis_title="Number Of Clusters (k)",
         template="plotly_white",
     )
     fig.update_yaxes(title_text="Inertia", secondary_y=False)
@@ -197,11 +199,9 @@ def plot_cluster_heatmap(
     labels: np.ndarray,
     features: list[str] | None = None,
     cluster_names: dict[int, str] | None = None,
-    title: str = "Normalised Feature Means by Cluster",
+    title: str = "Normalised Feature Means By Cluster (Z-Score)",
 ) -> go.Figure:
-    """
-    Heatmap where rows = clusters, columns = features, values = z-scored means.
-    """
+    """Heatmap where rows = clusters, columns = features, values = z-scored means."""
     from sklearn.preprocessing import StandardScaler
 
     cluster_names = cluster_names or {}
@@ -236,10 +236,12 @@ def plot_cluster_heatmap(
             zmid=0,
             text=np.round(z_scores.values, 2),
             texttemplate="%{text}",
+            colorbar=dict(title="Z-Score"),
         )
     )
     fig.update_layout(
         title=title,
+        title_font_size=16,
         xaxis_tickangle=-45,
         template="plotly_white",
         height=max(400, 80 * len(z_scores)),
@@ -254,17 +256,17 @@ def plot_genre_distribution(
     userids: list[str],
     top_n_genres: int = 10,
     cluster_names: dict[int, str] | None = None,
-    title: str = "Top Genre Distribution by Listener Segment",
+    title: str = "Top Genre Distribution By Listener Segment",
 ) -> go.Figure:
-    """
-    Stacked bar chart: proportion of each top genre per cluster.
-    """
+    """Stacked bar chart: proportion of each top genre per cluster."""
     cluster_names = cluster_names or {}
 
-    # Build user → cluster mapping
     user_cluster = dict(zip(userids, labels))
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].map(user_cluster)
+    # Drop rows where cluster is not mapped (users not in clustering result)
+    sc = sc.dropna(subset=["cluster"])
+    sc["cluster"] = sc["cluster"].astype(int)
     sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
 
     merged = sc.merge(
@@ -274,7 +276,12 @@ def plot_genre_distribution(
     )
     merged["genres"] = merged["genres"].apply(lambda x: x if isinstance(x, list) else [])
     exploded = merged.explode("genres").dropna(subset=["genres"])
-    exploded = exploded[exploded["genres"] != ""]
+    exploded = exploded[exploded["genres"].astype(str).str.strip() != ""]
+
+    if exploded.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title, template="plotly_white")
+        return fig
 
     top_genres = exploded["genres"].value_counts().head(top_n_genres).index.tolist()
     filtered = exploded[exploded["genres"].isin(top_genres)]
@@ -285,7 +292,7 @@ def plot_genre_distribution(
         .reset_index(name="count")
     )
     pivot_wide = pivot.pivot(index="cluster", columns="genres", values="count").fillna(0)
-    pivot_wide = pivot_wide.div(pivot_wide.sum(axis=1), axis=0)  # normalise rows
+    pivot_wide = pivot_wide.div(pivot_wide.sum(axis=1), axis=0)
     pivot_wide = pivot_wide[pivot_wide.index != -1]
     pivot_wide.index = [
         cluster_names.get(int(c), f"Cluster {c}") for c in pivot_wide.index
@@ -297,11 +304,16 @@ def plot_genre_distribution(
         y="proportion",
         color="genre",
         title=title,
-        labels={"cluster": "Listener Segment", "proportion": "Proportion of Plays"},
+        labels={"cluster": "Listener Segment", "proportion": "Proportion Of Plays", "genre": "Genre"},
         color_discrete_sequence=_PALETTE,
         template="plotly_white",
     )
-    fig.update_layout(barmode="stack")
+    fig.update_layout(
+        barmode="stack",
+        title_font_size=16,
+        xaxis_title="Listener Segment",
+        yaxis_title="Proportion Of Genre Plays",
+    )
     return fig
 
 
@@ -313,16 +325,29 @@ def plot_temporal_heatmap(
     cluster_name: str | None = None,
 ) -> go.Figure:
     """
-    Heatmap of mean listening activity: hours (x) × days-of-week (y) for one cluster.
+    Heatmap of mean listening activity (avg plays per user) for one cluster.
+
+    Values are normalised by the number of users in the cluster so that
+    heatmaps are directly comparable across segments of different sizes.
+    Rows = days of week (Mon–Sun), columns = hour of day (00:00–23:00).
     """
     user_cluster = dict(zip(userids, labels))
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].map(user_cluster)
     cluster_sc = sc[sc["cluster"] == cluster_id].copy()
 
-    cluster_sc["hour"] = cluster_sc["timestamp"].dt.hour
-    cluster_sc["dow"] = cluster_sc["timestamp"].dt.dayofweek
+    if cluster_sc.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Listening Activity Pattern: {cluster_name or f'Cluster {cluster_id}'} (No Data)",
+            template="plotly_white",
+        )
+        return fig
 
+    cluster_sc["hour"] = cluster_sc["timestamp"].dt.hour
+    cluster_sc["dow"] = cluster_sc["timestamp"].dt.dayofweek  # 0=Mon, 6=Sun
+
+    # Total plays per (day, hour)
     heatmap_data = (
         cluster_sc.groupby(["dow", "hour"])
         .size()
@@ -332,7 +357,11 @@ def plot_temporal_heatmap(
         .fillna(0)
     )
 
-    dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    # Normalise by user count → avg plays per user per slot
+    n_users = cluster_sc["userid"].nunique()
+    heatmap_data = heatmap_data / max(n_users, 1)
+
+    dow_labels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     name = cluster_name or f"Cluster {cluster_id}"
 
     fig = go.Figure(
@@ -341,21 +370,169 @@ def plot_temporal_heatmap(
             x=[f"{h:02d}:00" for h in range(24)],
             y=dow_labels,
             colorscale="Viridis",
+            colorbar=dict(title="Avg Plays Per User"),
         )
     )
     fig.update_layout(
-        title=f"Listening Activity Pattern: {name}",
-        xaxis_title="Hour of Day",
-        yaxis_title="Day of Week",
+        title=f"Listening Activity Pattern: {name}  (n={n_users} Users)",
+        title_font_size=16,
+        xaxis_title="Hour Of Day",
+        yaxis_title="Day Of Week",
         template="plotly_white",
     )
     return fig
 
 
-def save_figure(fig: go.Figure, path: str | Path, formats: list[str] | None = None) -> None:
-    """Save a Plotly figure to HTML and optionally to static formats."""
+# ---------------------------------------------------------------------------
+# Matplotlib demographic breakdown (returns matplotlib Figure for EPS export)
+# ---------------------------------------------------------------------------
+
+def plot_demographic_breakdown(
+    labels_df: pd.DataFrame,
+    profiles: pd.DataFrame,
+) -> dict[str, "matplotlib.figure.Figure"]:
+    """
+    Produce matplotlib figures showing how clusters split across demographic
+    dimensions (gender, age, country).  Returns a dict of {name: Figure} so
+    callers can save each individually as EPS.
+
+    Parameters
+    ----------
+    labels_df : DataFrame with columns [userid, cluster_name]
+    profiles  : DataFrame with columns [userid, gender, age, country]
+    """
+    import matplotlib.pyplot as plt
+
+    demo = profiles.set_index("userid")[["gender", "age", "country"]].copy()
+    labeled = labels_df.set_index("userid").join(demo, how="left")
+
+    figs: dict[str, plt.Figure] = {}
+    palette = _PALETTE
+
+    # --- Gender Distribution Per Segment ---
+    gender_data = labeled.dropna(subset=["gender"]).copy()
+    gender_data = gender_data[gender_data["gender"].str.strip() != ""]
+    if not gender_data.empty:
+        gender_ct = (
+            gender_data.groupby(["cluster_name", "gender"])
+            .size()
+            .unstack(fill_value=0)
+        )
+        gender_pct = gender_ct.div(gender_ct.sum(axis=1), axis=0) * 100
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        colors = palette[: len(gender_pct.columns)]
+        gender_pct.plot(kind="bar", ax=ax, color=colors, edgecolor="white", width=0.7)
+        ax.set_title("Gender Distribution By Listener Segment", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Listener Segment")
+        ax.set_ylabel("Percentage Of Users (%)")
+        ax.legend(title="Gender", bbox_to_anchor=(1.01, 1), loc="upper left")
+        ax.tick_params(axis="x", rotation=30)
+        plt.tight_layout()
+        figs["segment_gender_distribution"] = fig
+
+    # --- Median Age Per Segment (bar) ---
+    age_data = labeled.dropna(subset=["age"]).copy()
+    age_data = age_data[(age_data["age"] >= 10) & (age_data["age"] <= 100)]
+    if not age_data.empty:
+        median_age = age_data.groupby("cluster_name")["age"].median().sort_values()
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        median_age.plot(kind="barh", ax=ax, color=palette[0], edgecolor="white")
+        ax.set_title("Median Age Per Listener Segment", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Median Age (Years)")
+        ax.set_ylabel("Listener Segment")
+        plt.tight_layout()
+        figs["segment_median_age"] = fig
+
+    # --- Age Distribution Per Segment (overlapping histograms) ---
+    if not age_data.empty:
+        segments = age_data["cluster_name"].unique()
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for i, seg in enumerate(sorted(segments)):
+            grp = age_data[age_data["cluster_name"] == seg]["age"]
+            grp.hist(ax=ax, bins=15, alpha=0.55, label=seg,
+                     color=palette[i % len(palette)], edgecolor="white")
+        ax.set_title("Age Distribution By Listener Segment", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Age (Years)")
+        ax.set_ylabel("Number Of Users")
+        ax.legend(title="Segment", bbox_to_anchor=(1.01, 1), loc="upper left")
+        plt.tight_layout()
+        figs["segment_age_distribution"] = fig
+
+    # --- Top Country Distribution Per Segment ---
+    country_data = labeled.dropna(subset=["country"]).copy()
+    country_data = country_data[country_data["country"].str.strip() != ""]
+    if not country_data.empty:
+        top_countries = (
+            country_data["country"].value_counts().head(6).index.tolist()
+        )
+        c_seg = country_data[country_data["country"].isin(top_countries)]
+        if not c_seg.empty:
+            country_ct = (
+                c_seg.groupby(["cluster_name", "country"])
+                .size()
+                .unstack(fill_value=0)
+            )
+            country_pct = country_ct.div(country_ct.sum(axis=1), axis=0) * 100
+
+            fig, ax = plt.subplots(figsize=(12, 5))
+            country_pct.plot(kind="bar", ax=ax, edgecolor="white", width=0.7)
+            ax.set_title(
+                "Top Country Distribution By Listener Segment",
+                fontsize=13, fontweight="bold",
+            )
+            ax.set_xlabel("Listener Segment")
+            ax.set_ylabel("Percentage Of Users (%)")
+            ax.legend(title="Country", bbox_to_anchor=(1.01, 1), loc="upper left")
+            ax.tick_params(axis="x", rotation=30)
+            plt.tight_layout()
+            figs["segment_country_distribution"] = fig
+
+    return figs
+
+
+# ---------------------------------------------------------------------------
+# Save helper
+# ---------------------------------------------------------------------------
+
+def save_figure(
+    fig: go.Figure,
+    path: str | Path,
+    formats: list[str] | None = None,
+) -> None:
+    """
+    Save a Plotly figure to HTML (interactive) and EPS (publication quality).
+
+    EPS export requires the kaleido package.  If kaleido is unavailable the
+    function warns and falls back to SVG, which is also a lossless vector format.
+
+    Parameters
+    ----------
+    fig     : Plotly Figure
+    path    : base path without extension (extensions are appended automatically)
+    formats : list of static formats to export, defaults to ["eps"]
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Always save interactive HTML
     fig.write_html(str(path.with_suffix(".html")))
-    for fmt in (formats or []):
-        fig.write_image(str(path.with_suffix(f".{fmt}")))
+
+    # Static vector export — default to EPS
+    for fmt in formats or ["eps"]:
+        out_path = str(path.with_suffix(f".{fmt}"))
+        try:
+            fig.write_image(out_path)
+            logger.debug("Saved static figure: %s", out_path)
+        except Exception as exc:
+            # kaleido may not support eps in all build variants; fall back to svg
+            logger.warning(
+                "Could not export figure as %s (%s). Trying SVG fallback.", fmt, exc
+            )
+            try:
+                svg_path = str(path.with_suffix(".svg"))
+                fig.write_image(svg_path)
+                logger.info("Saved SVG fallback: %s", svg_path)
+            except Exception as exc2:
+                logger.warning("SVG export also failed: %s", exc2)
