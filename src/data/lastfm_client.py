@@ -59,30 +59,6 @@ def build_network() -> pylast.LastFMNetwork:
     )
 
 
-@retry(
-    retry=retry_if_exception_type((pylast.NetworkError, pylast.MalformedResponseError)),
-    wait=wait_exponential(multiplier=1, min=2, max=60),
-    stop=stop_after_attempt(5),
-    reraise=True,
-)
-def _fetch_recent_tracks_page(
-    network: pylast.LastFMNetwork,
-    username: str,
-    from_ts: int,
-    to_ts: int,
-    page: int,
-    page_size: int,
-) -> list[pylast.PlayedTrack]:
-    """Fetch one page of recent tracks for a user. Retries on transient errors."""
-    user = network.get_user(username)
-    return user.get_recent_tracks(
-        limit=page_size,
-        time_from=from_ts,
-        time_to=to_ts,
-        page=page,
-    )
-
-
 def fetch_user_scrobbles(
     network: pylast.LastFMNetwork,
     username: str,
@@ -92,6 +68,9 @@ def fetch_user_scrobbles(
 ) -> pd.DataFrame:
     """
     Fetch all scrobbles for *username* over the last `lookback_years` years.
+
+    Uses pylast's stream=True mode (pylast ≥ 5.x) which handles pagination
+    internally — the deprecated `page` keyword argument is not used.
 
     Returns
     -------
@@ -104,42 +83,50 @@ def fetch_user_scrobbles(
     to_ts = int(now.timestamp())
 
     records: list[dict] = []
-    page = 1
+    logger.debug("Fetching scrobbles for %s...", username)
 
-    logger.debug("Fetching scrobbles for %s (pages)...", username)
-
-    while True:
+    for attempt in range(5):
         try:
-            tracks = _fetch_recent_tracks_page(
-                network, username, from_ts, to_ts, page, page_size
+            user = network.get_user(username)
+            # stream=True lets pylast handle pagination; limit is the page size
+            track_stream = user.get_recent_tracks(
+                limit=page_size,
+                time_from=from_ts,
+                time_to=to_ts,
+                stream=True,
             )
+            for played in track_stream:
+                # Skip the currently-playing track which has no timestamp
+                if played.timestamp is None:
+                    continue
+                track = played.track
+                records.append(
+                    {
+                        "userid": username,
+                        "timestamp": pd.to_datetime(
+                            int(played.timestamp), unit="s", utc=True
+                        ),
+                        "artist_mbid": "",
+                        "artist_name": track.artist.name if track.artist else "",
+                        "track_mbid": "",
+                        "track_name": track.title,
+                    }
+                )
+            time.sleep(request_delay)
+            break  # success — exit retry loop
+
         except pylast.WSError as exc:
             if "User not found" in str(exc) or "Invalid user" in str(exc):
                 logger.warning("User %s not found on Last.fm — skipping.", username)
                 return pd.DataFrame(columns=_SCROBBLE_COLS)
             raise
-
-        if not tracks:
-            break
-
-        for played in tracks:
-            track = played.track
-            records.append(
-                {
-                    "userid": username,
-                    "timestamp": pd.to_datetime(int(played.timestamp), unit="s", utc=True),
-                    "artist_mbid": "",
-                    "artist_name": track.artist.name if track.artist else "",
-                    "track_mbid": "",
-                    "track_name": track.title,
-                }
+        except (pylast.NetworkError, pylast.MalformedResponseError) as exc:
+            wait = 2 ** attempt
+            logger.warning(
+                "Transient error fetching %s (attempt %d/5): %s — retrying in %ds.",
+                username, attempt + 1, exc, wait,
             )
-
-        if len(tracks) < page_size:
-            break
-
-        page += 1
-        time.sleep(request_delay)
+            time.sleep(wait)
 
     if not records:
         logger.info("  %s: no scrobbles in lookback window.", username)
