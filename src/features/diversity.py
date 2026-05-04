@@ -15,9 +15,12 @@ Features produced:
 
 from __future__ import annotations
 
+import logging
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy as scipy_entropy
+
+logger = logging.getLogger(__name__)
 
 
 def _shannon_entropy(counts: pd.Series) -> float:
@@ -103,8 +106,9 @@ def compute_genre_diversity(
         on="artist_name_normalized",
         how="left",
     )
+    # Normalise genres to Python list regardless of Parquet/numpy round-trip type
     merged["genres"] = merged["genres"].apply(
-        lambda x: x if isinstance(x, list) else []
+        lambda x: list(x) if hasattr(x, "__iter__") and not isinstance(x, str) else []
     )
 
     # Average genre tags per play
@@ -120,6 +124,11 @@ def compute_genre_diversity(
     merged_exploded = merged_exploded[merged_exploded["genres"] != ""]
 
     if merged_exploded.empty:
+        logger.warning(
+            "No genre data found after merging scrobbles with artist_genres. "
+            "All genre features will be zero. Check that artist_name normalisation "
+            "matches and that the genres column contains lists (not strings)."
+        )
         return pd.DataFrame(
             {
                 "unique_genres": pd.Series(0, index=avg_genre_tags.index, dtype=int),

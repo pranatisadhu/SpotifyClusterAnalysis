@@ -150,6 +150,19 @@ def compute_audio_feature_profile(
         "danceability", "energy", "valence", "tempo",
         "acousticness", "instrumentalness", "liveness", "speechiness",
     ]
+    available_cols = [c for c in audio_cols if c in audio_features.columns]
+    if not available_cols:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "audio_features DataFrame is missing all expected columns %s. "
+            "Returning empty audio profile. Check that fetch_audio_features() "
+            "ran successfully.", audio_cols
+        )
+        empty_idx = scrobbles["userid"].unique()
+        return pd.DataFrame(
+            {f"mean_{c}": np.nan for c in audio_cols},
+            index=pd.Index(empty_idx, name="userid"),
+        )
 
     # Build track_key in scrobbles
     sc = scrobbles.copy()
@@ -159,14 +172,14 @@ def compute_audio_feature_profile(
         + sc["track_name"].str.strip().str.lower()
     )
 
-    # Merge with audio features
+    # Merge with audio features; only use columns that actually exist
     merged = sc.merge(
-        audio_features[["track_key"] + audio_cols].dropna(subset=audio_cols),
+        audio_features[["track_key"] + available_cols].dropna(subset=available_cols),
         on="track_key",
         how="left",
     )
 
     # Mean audio features per user (user-level listening profile)
-    user_audio = merged.groupby("userid")[audio_cols].mean()
+    user_audio = merged.groupby("userid")[available_cols].mean()
     user_audio.columns = [f"mean_{c}" for c in user_audio.columns]
     return user_audio

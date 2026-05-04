@@ -46,8 +46,16 @@ _SCROBBLE_COLS = [
 
 def build_network() -> pylast.LastFMNetwork:
     """Build an authenticated pylast LastFMNetwork from environment variables."""
-    api_key = os.environ["LASTFM_API_KEY"]
-    api_secret = os.environ["LASTFM_API_SECRET"]
+    # Re-attempt dotenv load relative to this file in case CWD is a notebook dir
+    load_dotenv(Path(__file__).parents[2] / ".env", override=False)
+    api_key = os.environ.get("LASTFM_API_KEY")
+    api_secret = os.environ.get("LASTFM_API_SECRET")
+    missing = [name for name, val in [("LASTFM_API_KEY", api_key), ("LASTFM_API_SECRET", api_secret)] if not val]
+    if missing:
+        raise EnvironmentError(
+            f"Missing Last.fm credentials: {', '.join(missing)}. "
+            "Set them in your .env file at the project root."
+        )
     username = os.environ.get("LASTFM_USERNAME", "")
     password_hash = os.environ.get("LASTFM_PASSWORD_HASH", "")
 

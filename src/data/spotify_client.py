@@ -61,10 +61,20 @@ _ARTIST_GENRE_COLS = [
 
 def build_client() -> spotipy.Spotify:
     """Build a Spotify client using Client Credentials (no user login required)."""
+    # Re-attempt dotenv load relative to this file in case CWD is a notebook dir
+    load_dotenv(Path(__file__).parents[2] / ".env", override=False)
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
+    missing = [name for name, val in [("SPOTIFY_CLIENT_ID", client_id), ("SPOTIFY_CLIENT_SECRET", client_secret)] if not val]
+    if missing:
+        raise EnvironmentError(
+            f"Missing Spotify credentials: {', '.join(missing)}. "
+            "Set them in your .env file at the project root."
+        )
     return spotipy.Spotify(
         auth_manager=SpotifyClientCredentials(
-            client_id=os.environ["SPOTIFY_CLIENT_ID"],
-            client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
+            client_id=client_id,
+            client_secret=client_secret,
         ),
         requests_timeout=10,
     )
@@ -105,8 +115,11 @@ def fetch_artist_genres(
     cache: dict[str, dict] = {}
     if cache_path and Path(cache_path).exists():
         cached_df = pd.read_parquet(cache_path)
-        for _, row in cached_df.iterrows():
-            cache[row["artist_name_normalized"]] = row.to_dict()
+        for record in cached_df.to_dict("records"):
+            # Parquet + iterrows can return numpy arrays for list columns; normalise to list
+            g = record.get("genres", [])
+            record["genres"] = list(g) if hasattr(g, "__iter__") and not isinstance(g, str) else []
+            cache[record["artist_name_normalized"]] = record
         logger.info("Loaded %d cached artist lookups from %s.", len(cache), cache_path)
 
     records: list[dict] = []
@@ -251,7 +264,8 @@ def fetch_audio_features(
                     "time_signature": features.get("time_signature"),
                 }
             else:
-                cache[k] = {"track_key": k, "track_spotify_id": None}
+                # Include all expected columns so the DataFrame always has a consistent schema
+                cache[k] = {"track_key": k, **{col: None for col in _AUDIO_FEATURE_COLS}}
 
         time.sleep(request_delay)
 
