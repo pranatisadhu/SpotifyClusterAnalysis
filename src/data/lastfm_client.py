@@ -116,17 +116,47 @@ def fetch_user_scrobbles(
             break  # success — exit retry loop
 
         except pylast.WSError as exc:
-            if "User not found" in str(exc) or "Invalid user" in str(exc):
+            msg = str(exc)
+            if any(s in msg for s in ("User not found", "Invalid user", "6:")):
                 logger.warning("User %s not found on Last.fm — skipping.", username)
                 return pd.DataFrame(columns=_SCROBBLE_COLS)
-            raise
+            if attempt == 4:
+                logger.warning("Giving up on %s after 5 WSError attempts: %s", username, msg)
+                return pd.DataFrame(columns=_SCROBBLE_COLS)
+            wait = 2 ** attempt
+            logger.warning(
+                "WSError fetching %s (attempt %d/5): %s — retrying in %ds.",
+                username, attempt + 1, msg, wait,
+            )
+            time.sleep(wait)
+
+        except pylast.PyLastError as exc:
+            # pylast's streaming layer wraps WSErrors into PyLastError after
+            # its own internal retries exhaust; inspect the chained cause.
+            cause = exc.__cause__
+            msg = str(cause if cause else exc)
+            if any(s in msg for s in ("User not found", "Invalid user", "6:")):
+                logger.warning("User %s not found on Last.fm — skipping.", username)
+                return pd.DataFrame(columns=_SCROBBLE_COLS)
+            if attempt == 4:
+                logger.warning("Giving up on %s after 5 PyLastError attempts: %s", username, msg)
+                return pd.DataFrame(columns=_SCROBBLE_COLS)
+            wait = 2 ** attempt
+            logger.warning(
+                "API error fetching %s (attempt %d/5): %s — retrying in %ds.",
+                username, attempt + 1, msg, wait,
+            )
+            time.sleep(wait)
+
         except (pylast.NetworkError, pylast.MalformedResponseError) as exc:
+            if attempt == 4:
+                logger.warning("Giving up on %s after 5 network attempts: %s", username, exc)
+                return pd.DataFrame(columns=_SCROBBLE_COLS)
             wait = 2 ** attempt
             logger.warning(
                 "Transient error fetching %s (attempt %d/5): %s — retrying in %ds.",
                 username, attempt + 1, exc, wait,
             )
-            time.sleep(wait)
 
     if not records:
         logger.info("  %s: no scrobbles in lookback window.", username)
@@ -178,13 +208,17 @@ def fetch_all_users(
             df_user = pd.read_parquet(user_path)
             logger.debug("Resumed %s from cache (%d rows).", uid, len(df_user))
         else:
-            df_user = fetch_user_scrobbles(
-                network,
-                uid,
-                lookback_years=lookback_years,
-                page_size=page_size,
-                request_delay=request_delay,
-            )
+            try:
+                df_user = fetch_user_scrobbles(
+                    network,
+                    uid,
+                    lookback_years=lookback_years,
+                    page_size=page_size,
+                    request_delay=request_delay,
+                )
+            except Exception as exc:
+                logger.warning("Unexpected error for user %s: %s — skipping.", uid, exc)
+                df_user = pd.DataFrame(columns=_SCROBBLE_COLS)
             if len(df_user) >= min_scrobbles and user_path:
                 df_user.to_parquet(user_path, index=False)
 
