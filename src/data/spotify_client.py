@@ -78,9 +78,15 @@ def build_client() -> spotipy.Spotify:
 )
 def _search_artist(sp: spotipy.Spotify, artist_name: str) -> dict | None:
     """Search Spotify for an artist by name; return best match or None."""
-    results = sp.search(q=f"artist:{artist_name}", type="artist", limit=1)
-    items = results.get("artists", {}).get("items", [])
-    return items[0] if items else None
+    # Use field-filtered query first; fall back to plain name search for
+    # artists whose names contain special characters or punctuation that
+    # confuse Spotify's strict field-filter parser.
+    for query in (f"artist:{artist_name}", artist_name):
+        results = sp.search(q=query, type="artist", limit=1)
+        items = results.get("artists", {}).get("items", [])
+        if items:
+            return items[0]
+    return None
 
 
 def fetch_artist_genres(

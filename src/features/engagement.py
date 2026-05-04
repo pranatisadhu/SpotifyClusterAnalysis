@@ -151,6 +151,10 @@ def compute_audio_feature_profile(
         "acousticness", "instrumentalness", "liveness", "speechiness",
     ]
 
+    # No audio data available — return empty frame so join in builder is a no-op
+    if audio_features.empty or "track_key" not in audio_features.columns:
+        return pd.DataFrame(index=scrobbles["userid"].unique())
+
     # Build track_key in scrobbles
     sc = scrobbles.copy()
     sc["track_key"] = (
