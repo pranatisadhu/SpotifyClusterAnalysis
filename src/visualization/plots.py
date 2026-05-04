@@ -268,6 +268,8 @@ def plot_genre_distribution(
     user_cluster = dict(zip(userids, labels))
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].map(user_cluster)
+    sc = sc[sc["cluster"].notna()].copy()
+    sc["cluster"] = sc["cluster"].astype(int)
     sc["artist_name_normalized"] = sc["artist_name"].str.strip().str.lower()
 
     merged = sc.merge(
@@ -330,6 +332,8 @@ def plot_temporal_heatmap(
     user_cluster = dict(zip(userids, labels))
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].map(user_cluster)
+    sc = sc[sc["cluster"].notna()].copy()
+    sc["cluster"] = sc["cluster"].astype(int)
     cluster_sc = sc[sc["cluster"] == cluster_id].copy()
 
     cluster_sc["hour"] = cluster_sc["timestamp"].dt.hour
@@ -540,7 +544,8 @@ def plot_hour_distribution(
     sc = scrobbles.copy()
     sc["cluster"] = sc["userid"].map(user_cluster)
     sc["hour"] = sc["timestamp"].dt.hour
-    sc = sc[sc["cluster"] != -1]
+    sc = sc[sc["cluster"].notna() & (sc["cluster"] != -1)]
+    sc["cluster"] = sc["cluster"].astype(int)
 
     fig = go.Figure()
 
