@@ -149,6 +149,7 @@ def compute_audio_feature_profile(
     audio_cols = [
         "danceability", "energy", "valence", "tempo",
         "acousticness", "instrumentalness", "liveness", "speechiness",
+        "loudness",
     ]
     available_cols = [c for c in audio_cols if c in audio_features.columns]
     if not available_cols:
