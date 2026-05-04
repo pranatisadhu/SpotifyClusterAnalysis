@@ -122,9 +122,9 @@ def compute_genre_diversity(
     if merged_exploded.empty:
         return pd.DataFrame(
             {
-                "unique_genres": 0,
-                "genre_entropy": 0.0,
-                f"genre_concentration_{top_n}": 0.0,
+                "unique_genres": pd.Series(0, index=avg_genre_tags.index, dtype=int),
+                "genre_entropy": pd.Series(0.0, index=avg_genre_tags.index),
+                f"genre_concentration_{top_n}": pd.Series(0.0, index=avg_genre_tags.index),
                 "avg_genre_tags_per_play": avg_genre_tags,
             }
         )

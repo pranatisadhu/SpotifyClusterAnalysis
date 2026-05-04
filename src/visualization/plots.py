@@ -13,6 +13,7 @@ Functions:
   - plot_elbow                : KMeans elbow + silhouette dual-axis chart
   - plot_cluster_heatmap      : heatmap of normalised feature means per cluster
   - plot_genre_distribution   : stacked bar of top genres per cluster
+  - plot_genre_features       : grouped bar of per-cluster genre metric ratios
   - plot_temporal_heatmap     : listening activity by hour × day-of-week per cluster
   - plot_temporal_ratios      : grouped bar of morning/evening/weekend ratios per cluster
   - plot_hour_distribution    : normalised hour-of-day listening curves per cluster
@@ -278,6 +279,15 @@ def plot_genre_distribution(
     exploded = merged.explode("genres").dropna(subset=["genres"])
     exploded = exploded[exploded["genres"] != ""]
 
+    if exploded.empty:
+        match_rate = merged["genres"].apply(len).gt(0).mean()
+        raise ValueError(
+            f"No genre data found after joining scrobbles to artist_genres "
+            f"(artist name match rate: {match_rate:.1%}). "
+            "Check that artist_genres contains an 'artist_name_normalized' column "
+            "whose values are lowercase-stripped and match the scrobbles 'artist_name' field."
+        )
+
     top_genres = exploded["genres"].value_counts().head(top_n_genres).index.tolist()
     filtered = exploded[exploded["genres"].isin(top_genres)]
 
@@ -350,6 +360,97 @@ def plot_temporal_heatmap(
         xaxis_title="Hour of Day",
         yaxis_title="Day of Week",
         template="plotly_white",
+    )
+    return fig
+
+
+def plot_genre_features(
+    feature_matrix: pd.DataFrame,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Genre Feature Breakdown by Segment",
+) -> go.Figure:
+    """
+    Grouped bar chart comparing per-cluster means of the four genre-level features:
+    unique_genres, genre_entropy, genre_concentration_5, and avg_genre_tags_per_play.
+
+    Each metric is normalised to its global mean so all four axes are comparable
+    (ratio-to-global-mean, where 1.0 = average).
+
+    Parameters
+    ----------
+    feature_matrix : user-level feature DataFrame containing genre columns
+    labels         : cluster label per user (same order as feature_matrix rows)
+    cluster_names  : optional mapping {cluster_id: human_readable_name}
+    """
+    cluster_names = cluster_names or {}
+    genre_cols = [
+        c for c in [
+            "unique_genres", "genre_entropy", "genre_concentration_5", "avg_genre_tags_per_play"
+        ]
+        if c in feature_matrix.columns
+    ]
+    if not genre_cols:
+        raise ValueError(
+            "feature_matrix contains none of: unique_genres, genre_entropy, "
+            "genre_concentration_5, avg_genre_tags_per_play. "
+            "Run compute_genre_diversity() to produce these columns."
+        )
+
+    df = feature_matrix[genre_cols].copy()
+    df["cluster"] = labels
+    df = df[df["cluster"] != -1]
+
+    global_means = df[genre_cols].mean()
+    cluster_means = df.groupby("cluster")[genre_cols].mean()
+
+    # Normalise: each value expressed as ratio to global mean
+    normed = cluster_means.div(global_means.replace(0, np.nan)).fillna(0)
+    normed = normed.reset_index()
+    normed["cluster_label"] = normed["cluster"].map(
+        lambda c: cluster_names.get(int(c), f"Cluster {c}")
+    )
+
+    label_map = {
+        "unique_genres": "Unique Genres",
+        "genre_entropy": "Genre Entropy",
+        "genre_concentration_5": "Top-5 Genre Conc.",
+        "avg_genre_tags_per_play": "Avg Tags / Play",
+    }
+    bar_colors = {
+        "unique_genres": "#AB63FA",
+        "genre_entropy": "#00CC96",
+        "genre_concentration_5": "#EF553B",
+        "avg_genre_tags_per_play": "#FFA15A",
+    }
+
+    fig = go.Figure()
+    for col in genre_cols:
+        fig.add_trace(
+            go.Bar(
+                name=label_map.get(col, col),
+                x=normed["cluster_label"],
+                y=normed[col],
+                marker_color=bar_colors.get(col),
+                text=normed[col].map(lambda v: f"{v:.2f}×"),
+                textposition="outside",
+            )
+        )
+
+    fig.add_hline(
+        y=1.0,
+        line_dash="dot",
+        line_color="grey",
+        annotation_text="Global mean",
+        annotation_position="bottom right",
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title="Listener Segment",
+        yaxis_title="Ratio to Global Mean",
+        barmode="group",
+        template="plotly_white",
+        legend_title="Genre Metric",
     )
     return fig
 
