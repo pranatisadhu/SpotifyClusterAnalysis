@@ -7,13 +7,15 @@ All functions return a plotly Figure object — call .show() or .write_html()
 as needed.
 
 Functions:
-  - plot_umap_clusters      : 2D UMAP scatter coloured by cluster
-  - plot_cluster_radar      : radar/spider chart of cluster feature profiles
-  - plot_feature_importance : horizontal bar chart of RF feature importance
-  - plot_elbow              : KMeans elbow + silhouette dual-axis chart
-  - plot_cluster_heatmap    : heatmap of normalised feature means per cluster
-  - plot_genre_distribution : stacked bar of top genres per cluster
-  - plot_temporal_heatmap   : listening activity by hour × day-of-week per cluster
+  - plot_umap_clusters        : 2D UMAP scatter coloured by cluster
+  - plot_cluster_radar        : radar/spider chart of cluster feature profiles
+  - plot_feature_importance   : horizontal bar chart of RF feature importance
+  - plot_elbow                : KMeans elbow + silhouette dual-axis chart
+  - plot_cluster_heatmap      : heatmap of normalised feature means per cluster
+  - plot_genre_distribution   : stacked bar of top genres per cluster
+  - plot_temporal_heatmap     : listening activity by hour × day-of-week per cluster
+  - plot_temporal_ratios      : grouped bar of morning/evening/weekend ratios per cluster
+  - plot_hour_distribution    : normalised hour-of-day listening curves per cluster
 """
 
 from __future__ import annotations
@@ -348,6 +350,128 @@ def plot_temporal_heatmap(
         xaxis_title="Hour of Day",
         yaxis_title="Day of Week",
         template="plotly_white",
+    )
+    return fig
+
+
+def plot_temporal_ratios(
+    feature_matrix: pd.DataFrame,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Temporal Listening Ratios by Segment",
+) -> go.Figure:
+    """
+    Grouped bar chart comparing morning_ratio, evening_ratio, and weekend_ratio
+    across all clusters.
+
+    Parameters
+    ----------
+    feature_matrix : user-level feature DataFrame (must contain the ratio columns)
+    labels         : cluster label per user (same order as feature_matrix rows)
+    cluster_names  : optional mapping {cluster_id: human_readable_name}
+    """
+    cluster_names = cluster_names or {}
+    ratio_cols = [c for c in ["morning_ratio", "evening_ratio", "weekend_ratio"] if c in feature_matrix.columns]
+    if not ratio_cols:
+        raise ValueError("feature_matrix must contain at least one of: morning_ratio, evening_ratio, weekend_ratio")
+
+    df = feature_matrix[ratio_cols].copy()
+    df["cluster"] = labels
+    means = df[df["cluster"] != -1].groupby("cluster")[ratio_cols].mean().reset_index()
+    means["cluster_label"] = means["cluster"].map(
+        lambda c: cluster_names.get(int(c), f"Cluster {c}")
+    )
+
+    label_map = {
+        "morning_ratio": "Morning (06–12h)",
+        "evening_ratio": "Evening (18–00h)",
+        "weekend_ratio": "Weekend",
+    }
+
+    fig = go.Figure()
+    bar_colors = {"morning_ratio": "#FFA15A", "evening_ratio": "#636EFA", "weekend_ratio": "#00CC96"}
+
+    for col in ratio_cols:
+        fig.add_trace(
+            go.Bar(
+                name=label_map.get(col, col),
+                x=means["cluster_label"],
+                y=means[col],
+                marker_color=bar_colors.get(col),
+                text=means[col].map(lambda v: f"{v:.1%}"),
+                textposition="outside",
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Listener Segment",
+        yaxis_title="Fraction of Plays",
+        yaxis_tickformat=".0%",
+        barmode="group",
+        template="plotly_white",
+        legend_title="Time Period",
+    )
+    return fig
+
+
+def plot_hour_distribution(
+    scrobbles: pd.DataFrame,
+    labels: np.ndarray,
+    userids: list[str],
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Hour-of-Day Listening Distribution by Segment",
+) -> go.Figure:
+    """
+    Normalised hour-of-day distribution (0–23) with one line per cluster, so
+    different segments' peak listening times can be compared directly.
+
+    Parameters
+    ----------
+    scrobbles     : DataFrame with columns [userid, timestamp (datetime64)]
+    labels        : cluster label per user (same order as userids)
+    userids       : list of user IDs matching the labels array
+    cluster_names : optional mapping {cluster_id: human_readable_name}
+    """
+    cluster_names = cluster_names or {}
+    user_cluster = dict(zip(userids, labels))
+
+    sc = scrobbles.copy()
+    sc["cluster"] = sc["userid"].map(user_cluster)
+    sc["hour"] = sc["timestamp"].dt.hour
+    sc = sc[sc["cluster"] != -1]
+
+    fig = go.Figure()
+
+    for i, cid in enumerate(sorted(sc["cluster"].unique())):
+        cluster_sc = sc[sc["cluster"] == cid]
+        hour_counts = cluster_sc["hour"].value_counts().reindex(range(24), fill_value=0)
+        hour_norm = hour_counts / hour_counts.sum()
+
+        label = cluster_names.get(int(cid), f"Cluster {cid}")
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(24)),
+                y=hour_norm.values,
+                mode="lines+markers",
+                name=label,
+                line=dict(color=_PALETTE[i % len(_PALETTE)], width=2),
+                marker=dict(size=6),
+                hovertemplate="Hour %{x}:00 — %{y:.1%}<extra>" + label + "</extra>",
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis=dict(
+            title="Hour of Day",
+            tickvals=list(range(24)),
+            ticktext=[f"{h:02d}:00" for h in range(24)],
+            tickangle=-45,
+        ),
+        yaxis=dict(title="Fraction of Plays", tickformat=".0%"),
+        template="plotly_white",
+        legend_title="Segment",
     )
     return fig
 
