@@ -253,3 +253,71 @@ def get_user_top_artists(
     except pylast.WSError as exc:
         logger.warning("Could not fetch top artists for %s: %s", username, exc)
         return []
+
+
+@retry(
+    retry=retry_if_exception_type((pylast.NetworkError, pylast.MalformedResponseError)),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
+def _fetch_artist_tags(network: pylast.LastFMNetwork, artist_name: str) -> list[str]:
+    """Return the top Last.fm tags for an artist as a list of strings."""
+    artist = network.get_artist(artist_name)
+    tags = artist.get_top_tags(limit=5)
+    return [t.item.name.lower().strip() for t in tags if t.item and t.item.name]
+
+
+def fetch_artist_genres_lastfm(
+    network: pylast.LastFMNetwork,
+    artist_names: list[str],
+    cache_path: str | Path | None = None,
+    request_delay: float = 0.25,
+) -> pd.DataFrame:
+    """
+    Fetch genre tags for each artist using the Last.fm tags API.
+    Returns a DataFrame with the same schema as fetch_artist_genres() so it
+    is a drop-in replacement when Spotify credentials are unavailable.
+
+    Returns
+    -------
+    pd.DataFrame with columns: artist_name_normalized, spotify_artist_id (None),
+    genres (list[str]), popularity (None)
+    """
+    def _norm(name: str) -> str:
+        return name.strip().lower()
+
+    cache: dict[str, dict] = {}
+    if cache_path and Path(cache_path).exists():
+        cached_df = pd.read_parquet(cache_path)
+        for record in cached_df.to_dict("records"):
+            g = record.get("genres", [])
+            record["genres"] = list(g) if hasattr(g, "__iter__") and not isinstance(g, str) else []
+            cache[record["artist_name_normalized"]] = record
+        logger.info("Loaded %d cached Last.fm tag lookups.", len(cache))
+
+    names_to_fetch = [n for n in artist_names if _norm(n) not in cache]
+    logger.info("%d artists to fetch from Last.fm tags (%d cached).", len(names_to_fetch), len(cache))
+
+    for name in tqdm(names_to_fetch, desc="Fetching Last.fm artist tags"):
+        norm = _norm(name)
+        try:
+            tags = _fetch_artist_tags(network, name)
+        except Exception as exc:
+            logger.warning("Failed to fetch tags for '%s': %s", name, exc)
+            tags = []
+        cache[norm] = {
+            "artist_name_normalized": norm,
+            "spotify_artist_id": None,
+            "genres": tags,
+            "popularity": None,
+        }
+        time.sleep(request_delay)
+
+    df = pd.DataFrame(list(cache.values()))
+    if cache_path:
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+        logger.info("Last.fm tag cache saved (%d entries).", len(df))
+
+    return df
