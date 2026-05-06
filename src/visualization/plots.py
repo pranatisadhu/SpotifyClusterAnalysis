@@ -573,6 +573,67 @@ def plot_temporal_heatmap(
     return fig
 
 
+def plot_hour_distribution(
+    scrobbles: pd.DataFrame,
+    labels: np.ndarray,
+    userids: list[str],
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Listening Activity By Hour Of Day Per Segment",
+) -> go.Figure:
+    """
+    Line chart of average plays per user by hour of day, one line per cluster.
+
+    Values are normalised by cluster size so segments of different sizes
+    are directly comparable.
+    """
+    cluster_names = cluster_names or {}
+    user_cluster = {_uid_str(uid): int(cid) for uid, cid in zip(userids, labels)}
+
+    sc = scrobbles.copy()
+    sc["cluster"] = sc["userid"].apply(_uid_str).map(user_cluster)
+    sc = sc[sc["cluster"].notna()].copy()
+    sc["cluster"] = sc["cluster"].astype(int)
+    sc["hour"] = pd.to_datetime(sc["timestamp"]).dt.hour
+
+    cluster_sizes = sc.groupby("cluster")["userid"].nunique()
+
+    fig = go.Figure()
+    for cid in sorted(sc["cluster"].unique()):
+        if cid == -1:
+            continue
+        hourly = (
+            sc[sc["cluster"] == cid]
+            .groupby("hour")
+            .size()
+            .reindex(range(24), fill_value=0)
+        )
+        n_users = max(int(cluster_sizes.get(cid, 1)), 1)
+        avg_per_user = hourly / n_users
+        label = cluster_names.get(cid, f"Cluster {cid}")
+        fig.add_trace(go.Scatter(
+            x=list(range(24)),
+            y=avg_per_user.values,
+            mode="lines+markers",
+            name=label,
+            marker=dict(size=6),
+        ))
+
+    fig.update_layout(
+        title=title,
+        xaxis=dict(
+            title="Hour Of Day",
+            tickmode="array",
+            tickvals=list(range(24)),
+            ticktext=[f"{h:02d}:00" for h in range(24)],
+            tickangle=-45,
+        ),
+        yaxis_title="Avg Plays Per User",
+        template="plotly_white",
+        legend_title="Segment",
+    )
+    return fig
+
+
 def save_figure(
     fig: go.Figure,
     path: str | Path,
