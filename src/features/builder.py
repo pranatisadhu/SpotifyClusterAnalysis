@@ -53,7 +53,16 @@ def build_feature_matrix(
     artist_div = compute_artist_diversity(scrobbles, top_n=top_n)
 
     logger.info("Computing genre diversity features...")
-    genre_div = compute_genre_diversity(scrobbles, artist_genres, top_n=5)
+    if artist_genres is not None and len(artist_genres) > 0:
+        genre_div = compute_genre_diversity(scrobbles, artist_genres, top_n=5)
+    else:
+        logger.warning("artist_genres is empty or None — genre features will be zero.")
+        user_idx = scrobbles["userid"].unique()
+        genre_div = pd.DataFrame(
+            {"unique_genres": 0, "genre_entropy": 0.0,
+             "genre_concentration_5": 0.0, "avg_genre_tags_per_play": 0.0},
+            index=pd.Index(user_idx, name="userid"),
+        )
 
     logger.info("Computing temporal features...")
     temporal = compute_temporal_features(scrobbles, pca_components=pca_n)
