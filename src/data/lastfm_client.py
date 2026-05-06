@@ -314,6 +314,12 @@ def fetch_artist_genres_lastfm(
         }
         time.sleep(request_delay)
 
+        # Save after every 50 artists so progress survives interruptions
+        if cache_path and len(cache) % 50 == 0:
+            _df = pd.DataFrame(list(cache.values()))
+            Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+            _df.to_parquet(cache_path, index=False)
+
     df = pd.DataFrame(list(cache.values()))
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
