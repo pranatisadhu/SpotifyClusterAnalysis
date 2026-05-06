@@ -425,6 +425,68 @@ def plot_genre_features(
     return fig
 
 
+def plot_temporal_ratios(
+    feature_matrix: pd.DataFrame,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Temporal Listening Patterns By Listener Segment",
+) -> go.Figure:
+    """
+    Grouped bar chart of temporal ratio features per cluster.
+
+    Uses pre-computed columns from the feature matrix (morning_ratio,
+    afternoon_ratio, evening_ratio, night_ratio, weekend_ratio, etc.).
+    Each metric is the mean across users in that cluster, shown as a
+    proportion (0–1) so bars are directly comparable across segments.
+    """
+    cluster_names = cluster_names or {}
+
+    candidates = [
+        "morning_ratio", "afternoon_ratio", "evening_ratio", "night_ratio",
+        "weekend_ratio", "weekday_ratio",
+    ]
+    ratio_cols = [c for c in candidates if c in feature_matrix.columns]
+
+    if not ratio_cols:
+        fig = go.Figure()
+        fig.update_layout(
+            title=title, template="plotly_white",
+            annotations=[dict(
+                text="No temporal ratio columns found in feature matrix.",
+                showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper",
+            )],
+        )
+        return fig
+
+    df = feature_matrix.copy()
+    df["cluster"] = labels
+    df = df[df["cluster"] != -1]
+
+    means = df.groupby("cluster")[ratio_cols].mean()
+
+    fig = go.Figure()
+    for col in ratio_cols:
+        x_labels = [
+            cluster_names.get(int(cid), f"Cluster {cid}") for cid in means.index
+        ]
+        fig.add_trace(go.Bar(
+            name=col.replace("_", " ").title(),
+            x=x_labels,
+            y=means[col].values,
+        ))
+
+    fig.update_layout(
+        barmode="group",
+        title=title,
+        xaxis_title="Listener Segment",
+        yaxis_title="Mean Proportion Of Plays",
+        template="plotly_white",
+        legend_title="Time Window",
+        yaxis=dict(range=[0, 1]),
+    )
+    return fig
+
+
 def plot_temporal_heatmap(
     scrobbles: pd.DataFrame,
     labels: np.ndarray,
