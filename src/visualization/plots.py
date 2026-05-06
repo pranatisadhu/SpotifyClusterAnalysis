@@ -366,6 +366,65 @@ def plot_genre_distribution(
     return fig
 
 
+def plot_genre_features(
+    feature_matrix: pd.DataFrame,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    title: str = "Genre Diversity Features By Listener Segment",
+) -> go.Figure:
+    """
+    Grouped bar chart of genre diversity metrics (unique_genres, genre_entropy,
+    genre_concentration_5, avg_genre_tags_per_play) per cluster.
+
+    Uses pre-computed columns in the feature matrix — no raw scrobbles needed.
+    Each metric is min-max normalised so all four bars share a 0–1 y-axis.
+    """
+    cluster_names = cluster_names or {}
+    genre_cols = [c for c in [
+        "unique_genres", "genre_entropy",
+        "genre_concentration_5", "avg_genre_tags_per_play",
+    ] if c in feature_matrix.columns]
+
+    if not genre_cols:
+        fig = go.Figure()
+        fig.update_layout(
+            title=title, template="plotly_white",
+            annotations=[dict(text="No genre feature columns found in feature matrix.",
+                              showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")],
+        )
+        return fig
+
+    df = feature_matrix.copy()
+    df["cluster"] = labels
+    df = df[df["cluster"] != -1]
+
+    means = df.groupby("cluster")[genre_cols].mean()
+
+    # Min-max normalise each metric across clusters so all fit on 0-1 axis
+    normed = (means - means.min()) / (means.max() - means.min() + 1e-9)
+
+    fig = go.Figure()
+    for col in genre_cols:
+        x_labels = [
+            cluster_names.get(int(cid), f"Cluster {cid}") for cid in normed.index
+        ]
+        fig.add_trace(go.Bar(
+            name=col.replace("_", " ").title(),
+            x=x_labels,
+            y=normed[col].values,
+        ))
+
+    fig.update_layout(
+        barmode="group",
+        title=title,
+        xaxis_title="Listener Segment",
+        yaxis_title="Normalised Score (0–1)",
+        template="plotly_white",
+        legend_title="Feature",
+    )
+    return fig
+
+
 def plot_temporal_heatmap(
     scrobbles: pd.DataFrame,
     labels: np.ndarray,
