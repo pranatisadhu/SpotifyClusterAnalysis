@@ -8,6 +8,8 @@ as needed.
 
 Functions:
   - plot_umap_clusters      : 2D UMAP scatter coloured by cluster
+  - plot_umap_density       : UMAP scatter with per-cluster KDE density contours
+  - plot_tsne               : t-SNE supplementary projection coloured by cluster
   - plot_cluster_radar      : radar/spider chart of cluster feature profiles
   - plot_feature_importance : horizontal bar chart of RF feature importance
   - plot_elbow              : KMeans elbow + silhouette dual-axis chart
@@ -76,6 +78,132 @@ def plot_umap_clusters(
         template="plotly_white",
     )
     fig.update_traces(marker=dict(size=8, opacity=0.8))
+    return fig
+
+
+def plot_umap_density(
+    umap_coords: np.ndarray,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    title: str = "UMAP — Per-Cluster Density Contours",
+) -> go.Figure:
+    """
+    UMAP scatter overlaid with per-cluster 2D KDE density contours.
+
+    Parameters
+    ----------
+    umap_coords : (n_users, 2) array of UMAP coordinates
+    labels : cluster label per user (-1 = noise, excluded from contours)
+    cluster_names : optional mapping {cluster_id: human_readable_name}
+    """
+    cluster_names = cluster_names or {}
+    color_map = _cluster_color_map(labels)
+    fig = go.Figure()
+
+    unique_clusters = sorted(c for c in set(labels) if c != -1)
+
+    for cid in unique_clusters:
+        mask = labels == cid
+        x = umap_coords[mask, 0]
+        y = umap_coords[mask, 1]
+        color = color_map[cid]
+        name = cluster_names.get(cid, f"Cluster {cid}")
+
+        fig.add_trace(
+            go.Histogram2dContour(
+                x=x,
+                y=y,
+                name=name,
+                ncontours=6,
+                colorscale=[[0, "rgba(0,0,0,0)"], [1, color]],
+                showscale=False,
+                contours=dict(showlabels=False),
+                line=dict(width=1.5),
+                hoverinfo="skip",
+            )
+        )
+
+    for cid in unique_clusters:
+        mask = labels == cid
+        name = cluster_names.get(cid, f"Cluster {cid}")
+        fig.add_trace(
+            go.Scatter(
+                x=umap_coords[mask, 0],
+                y=umap_coords[mask, 1],
+                mode="markers",
+                name=name,
+                marker=dict(size=5, opacity=0.5, color=color_map[cid]),
+                showlegend=True,
+            )
+        )
+
+    if np.any(labels == -1):
+        noise_mask = labels == -1
+        fig.add_trace(
+            go.Scatter(
+                x=umap_coords[noise_mask, 0],
+                y=umap_coords[noise_mask, 1],
+                mode="markers",
+                name="Noise",
+                marker=dict(size=4, opacity=0.3, color="#cccccc"),
+                showlegend=True,
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="UMAP-1",
+        yaxis_title="UMAP-2",
+        template="plotly_white",
+        legend_title="Segment",
+    )
+    return fig
+
+
+def plot_tsne(
+    X_scaled: np.ndarray,
+    labels: np.ndarray,
+    cluster_names: dict[int, str] | None = None,
+    perplexity: int = 30,
+    random_state: int = 42,
+    title: str = "t-SNE Supplementary Projection",
+) -> go.Figure:
+    """
+    Compute and plot a 2D t-SNE projection of the scaled feature matrix.
+
+    Parameters
+    ----------
+    X_scaled : (n_users, n_features) scaled feature matrix (noise rows included)
+    labels : cluster label per user
+    perplexity : t-SNE perplexity (typically 5–50; default 30)
+    """
+    from sklearn.manifold import TSNE
+
+    cluster_names = cluster_names or {}
+    color_map = _cluster_color_map(labels)
+
+    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=random_state, n_jobs=-1)
+    coords = tsne.fit_transform(X_scaled)
+
+    df = pd.DataFrame({"x": coords[:, 0], "y": coords[:, 1], "cluster": labels})
+    df["label"] = df["cluster"].map(
+        lambda c: cluster_names.get(c, f"Cluster {c}" if c != -1 else "Noise")
+    )
+
+    fig = px.scatter(
+        df,
+        x="x",
+        y="y",
+        color="label",
+        color_discrete_map={
+            cluster_names.get(c, f"Cluster {c}" if c != -1 else "Noise"): color_map[c]
+            for c in color_map
+        },
+        title=title,
+        labels={"x": "t-SNE-1", "y": "t-SNE-2", "label": "Segment"},
+        template="plotly_white",
+    )
+    fig.update_traces(marker=dict(size=6, opacity=0.75))
     return fig
 
 
